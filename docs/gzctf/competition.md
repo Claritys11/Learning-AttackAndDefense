@@ -27,7 +27,7 @@ This guide details the operational procedures for competing in an A&D tournament
    - Immediate backup: Copy critical challenge directories to a safe local backup.
 
 ## 3. Flag Lifecycle & Submission
-1. In GZCTF, flags rotate every tick (typically 1-5 minutes).
+1. In GZCTF, flags rotate every tick (`AdTickSeconds` engine default is 60 seconds, clamped 15-3600s; typically configured between 1-5 minutes for live tournaments).
 2. Never accumulate stolen flags. Submit them via your automated script or console immediately upon capture to avoid the expiration window (`AdFlagLifetimeTicks`).
 
 ## 4. Rules & Compliance

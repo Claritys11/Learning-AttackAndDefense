@@ -54,7 +54,7 @@ Practical, competition-tested concepts:
 
 ### C. GZCTF Platform Operations
 Derived directly from primary GZCTF documentation and source:
-* **Round & Tick Cadence**: `AdWarmupSeconds` (warmup period without flags/SLA), `AdTickSeconds` (1-5 min rounds), atomic advance transactions.
+* **Round & Tick Cadence**: `AdWarmupSeconds` (warmup period without flags/SLA, default 1800s), `AdTickSeconds` (engine default 60s, clamped 15-3600s; tournament-configured e.g. 1-5 mins), atomic advance transactions.
 * **Container Lifecycle & Networks**: Per-team challenge containers, `Open` bridge vs `Isolated` bridge (`ad.allowEgress`).
 * **Dynamic Flag Delivery**: `flag{...}` rotating flags delivered via `GZCTF_FLAG_FILE` (`/flag` in Docker via read-only host bind mount; `/gzctf-flag/flag` in Kubernetes).
 * **Flag Expiration**: `AdFlagLifetimeTicks` (flags expire after 3-5 rounds).
