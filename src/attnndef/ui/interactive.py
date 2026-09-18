@@ -17,6 +17,8 @@ from ..operations import (
     DefenseStatus,
     FlagRecord,
     FlagStatus,
+    Mission,
+    MissionStatus,
     OperationService,
     OperatorAction,
     RoundStatus,
@@ -306,6 +308,7 @@ class InteractiveConsole:
                 round_id = self.context.current_round if self.context else 0
 
                 wf_id = None
+                m_id = None
                 wf_choice = self._ask("Attach to workflow? [y/N]", "N").lower()
                 if wf_choice in ("y", "yes"):
                     active_wfs = self.operation_service.list_workflows(status=WorkflowStatus.ACTIVE)
@@ -317,6 +320,21 @@ class InteractiveConsole:
                     if wf_input:
                         matched = [w for w in active_wfs if w.workflow_id.startswith(wf_input)]
                         wf_id = matched[0].workflow_id if matched else wf_input
+
+                    if wf_id:
+                        m_choice = self._ask("Attach to mission? [y/N]", "N").lower()
+                        if m_choice in ("y", "yes"):
+                            active_ms = self.operation_service.list_missions(workflow_id=wf_id, status=MissionStatus.IN_PROGRESS)
+                            if not active_ms:
+                                active_ms = self.operation_service.list_missions(workflow_id=wf_id, status=MissionStatus.OPEN)
+                            if active_ms:
+                                self.output("Available missions:")
+                                for m in active_ms:
+                                    self.output(f"  [{m.mission_id[:8]}] {m.title} ({m.target_id}:{m.service_port})")
+                            m_input = self._ask("Mission ID (or prefix)", "").strip()
+                            if m_input:
+                                matched = [m for m in active_ms if m.mission_id.startswith(m_input)]
+                                m_id = matched[0].mission_id if matched else m_input
 
                 parent_act_id = None
                 if category == ActionCategory.VERIFICATION:
@@ -334,12 +352,14 @@ class InteractiveConsole:
                     status="completed" if success else "failed",
                     evidence_id=ev_id,
                     workflow_id=wf_id,
+                    mission_id=m_id,
                     parent_action_id=parent_act_id,
                     tool_execution_id=record.id,
                     details={"parameters": parameters, "duration_s": duration_s},
                 )
                 wf_str = f" [WF: {act.workflow_id[:8]}]" if act.workflow_id else ""
-                self.output(f"✓ Operator Action recorded: [{act.category.value.upper()}]{wf_str} {act.summary}")
+                m_str = f" [Mission: {act.mission_id[:8]}]" if act.mission_id else ""
+                self.output(f"✓ Operator Action recorded: [{act.category.value.upper()}]{wf_str}{m_str} {act.summary}")
 
     def _resolve_target_and_scope(self, default_host: str = "") -> tuple[bool, Target | None, str]:
         target: Target | None = None
@@ -978,7 +998,8 @@ class InteractiveConsole:
                 "  6. SLA / Health Observations\n"
                 "  7. Activity Timeline\n"
                 "  8. Workflows\n"
-                "  9. Knowledge Base\n"
+                "  9. Missions\n"
+                "  10. Knowledge Base\n"
                 "  0. Back"
             )
             choice = self._ask("Select", "0")
@@ -1001,6 +1022,8 @@ class InteractiveConsole:
             elif choice == "8":
                 self._ad_workflows()
             elif choice == "9":
+                self._ad_missions()
+            elif choice == "10":
                 self._ad_knowledge()
             else:
                 self.output("Invalid selection.")
@@ -1095,6 +1118,7 @@ class InteractiveConsole:
                 status = self._ask("Status", "completed")
 
                 wf_id = None
+                m_id = None
                 wf_choice = self._ask("Attach to workflow? [y/N]", "N").lower()
                 if wf_choice in ("y", "yes"):
                     active_wfs = self.operation_service.list_workflows(status=WorkflowStatus.ACTIVE)
@@ -1106,6 +1130,20 @@ class InteractiveConsole:
                     if wf_input:
                         matched = [w for w in active_wfs if w.workflow_id.startswith(wf_input)]
                         wf_id = matched[0].workflow_id if matched else wf_input
+                    if wf_id:
+                        m_choice = self._ask("Attach to mission? [y/N]", "N").lower()
+                        if m_choice in ("y", "yes"):
+                            active_ms = self.operation_service.list_missions(workflow_id=wf_id, status=MissionStatus.IN_PROGRESS)
+                            if not active_ms:
+                                active_ms = self.operation_service.list_missions(workflow_id=wf_id, status=MissionStatus.OPEN)
+                            if active_ms:
+                                self.output("Available missions:")
+                                for m in active_ms:
+                                    self.output(f"  [{m.mission_id[:8]}] {m.title} ({m.target_id}:{m.service_port})")
+                            m_input = self._ask("Mission ID (or prefix)", "").strip()
+                            if m_input:
+                                matched = [m for m in active_ms if m.mission_id.startswith(m_input)]
+                                m_id = matched[0].mission_id if matched else m_input
 
                 parent_act_id = None
                 if cat == ActionCategory.VERIFICATION:
@@ -1124,10 +1162,12 @@ class InteractiveConsole:
                         target_id=tgt or None,
                         status=status,
                         workflow_id=wf_id,
+                        mission_id=m_id,
                         parent_action_id=parent_act_id,
                     )
                     wf_str = f" [WF: {act.workflow_id[:8]}]" if act.workflow_id else ""
-                    self.output(f"✓ Action recorded: [{act.category.value.upper()}]{wf_str} {act.summary}")
+                    m_str = f" [Mission: {act.mission_id[:8]}]" if act.mission_id else ""
+                    self.output(f"✓ Action recorded: [{act.category.value.upper()}]{wf_str}{m_str} {act.summary}")
                 except Exception as exc:
                     self.output(f"✗ Failed to record action: {exc}")
 
@@ -1487,13 +1527,14 @@ class InteractiveConsole:
             tgt = self.target_service.get_target(wf.target_id)
             if tgt:
                 self.output("\n  TARGET INTELLIGENCE CORRELATION:")
-                self.output(f"    Target:      {tgt.id} ({tgt.host}:{tgt.port}) Role: {tgt.role.value}")
-                obs_list = self.target_service.list_observations(tgt.id)
+                self.output(f"    Target:      {tgt.id} ({tgt.host}) Role: {tgt.role.value}")
+                obs_list = self.target_service.history(tgt.id)
                 self.output(f"    Historical:  {len(obs_list)} observation(s)")
                 if obs_list:
-                    latest = obs_list[-1]
+                    latest = obs_list[0]
                     t_str = time.strftime("%H:%M:%S", time.localtime(latest.observed_at))
-                    self.output(f"    Latest Obs:  {t_str} ({latest.source}) Status: {latest.status}")
+                    srvs = ", ".join(f"{s.port}/{s.name}" for s in latest.services) if latest.services else "none"
+                    self.output(f"    Latest Obs:  #{latest.id} at {t_str} Status: {latest.status} (Services: {srvs})")
 
         # Workflow Activity
         entries = self.operation_service.get_workflow_timeline(wf.workflow_id)
@@ -1565,6 +1606,664 @@ class InteractiveConsole:
                 self.output(f"  {t_str:<10} {e.category:<14} {e.title}")
         self.output("")
         self._ask("Press Enter to continue", "")
+
+    # --- MISSIONS UI ---
+
+    def _ad_missions(self):
+        while True:
+            self.output(
+                "\nMISSIONS\n"
+                "────────────────────────────\n"
+                "  1. List Missions\n"
+                "  2. Create Mission\n"
+                "  3. Open Mission\n"
+                "  4. Start Mission\n"
+                "  5. Complete Mission\n"
+                "  6. Abort Mission\n"
+                "  7. Mission Timeline\n"
+                "  0. Back"
+            )
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            elif choice == "1":
+                self._list_missions_ui()
+            elif choice == "2":
+                self._create_mission_ui()
+            elif choice == "3":
+                self._open_mission_ui()
+            elif choice == "4":
+                self._start_mission_ui()
+            elif choice == "5":
+                self._complete_mission_ui()
+            elif choice == "6":
+                self._abort_mission_ui()
+            elif choice == "7":
+                self._mission_timeline_ui()
+            else:
+                self.output("Invalid selection.")
+
+    def _list_missions_ui(self):
+        missions = self.operation_service.list_missions()
+        self.output("\nMISSIONS\n────────────────────────────")
+        if not missions:
+            self.output("  (no missions created)")
+        else:
+            for m in missions:
+                t_str = time.strftime("%H:%M:%S", time.localtime(m.created_at))
+                srv = f"{m.service_protocol.upper()}:{m.service_port}"
+                self.output(f"  [{m.mission_id[:8]}] {m.title} (Target: {m.target_id}, {srv}) [{m.status.value.upper()}] @ {t_str}")
+        self.output("")
+
+    def _create_mission_ui(self):
+        active_wfs = self.operation_service.list_workflows(status=WorkflowStatus.ACTIVE)
+        if not active_wfs:
+            active_wfs = self.operation_service.list_workflows()
+        if not active_wfs:
+            self.output("No workflows found. Create a workflow first.")
+            return
+
+        self.output("Available Workflows:")
+        for w in active_wfs:
+            self.output(f"  [{w.workflow_id[:8]}] {w.title} (Target: {w.target_id or 'none'}) [{w.status.value.upper()}]")
+
+        wf_input = self._ask("Workflow ID (or prefix)").strip()
+        if not wf_input:
+            return
+        matched = [w for w in active_wfs if w.workflow_id.startswith(wf_input)]
+        if not matched:
+            self.output(f"Workflow not found: {wf_input}")
+            return
+        wf = matched[0]
+
+        def_tgt = wf.target_id or (self.context.selected_target if self.context else "")
+        target_id = self._ask("Target ID", def_tgt).strip()
+        if not target_id:
+            self.output("Target ID is required.")
+            return
+
+        port_str = self._ask("Service Port (e.g. 80, 8080, 22)").strip()
+        try:
+            port = int(port_str)
+            if not (1 <= port <= 65535):
+                raise ValueError("port out of range")
+        except ValueError:
+            self.output("Invalid service port (must be 1-65535).")
+            return
+
+        protocol = self._ask("Protocol (tcp/udp)", "tcp").strip().lower()
+        title = self._ask("Mission Title").strip()
+        if not title:
+            self.output("Title is required.")
+            return
+        objective = self._ask("Mission Objective (optional)").strip()
+
+        init_obs_id = None
+        if self.target_service:
+            hist = self.target_service.history(target_id, limit=5)
+            if hist:
+                self.output("Target Observations:")
+                for o in hist:
+                    t_str = time.strftime("%H:%M:%S", time.localtime(o.observed_at))
+                    srvs = ", ".join(f"{s.port}/{s.name}" for s in o.services) if o.services else "none"
+                    self.output(f"  #{o.id} at {t_str} [{o.status}] (services: {srvs})")
+                obs_choice = self._ask("Initial Observation ID (optional, Enter to skip)", "").strip()
+                if obs_choice:
+                    try:
+                        init_obs_id = int(obs_choice)
+                    except ValueError:
+                        self.output("Invalid observation ID, skipping association.")
+
+        notes = self._ask("Notes (optional)").strip()
+
+        try:
+            m = self.operation_service.create_mission(
+                workflow_id=wf.workflow_id,
+                target_id=target_id,
+                service_port=port,
+                service_protocol=protocol,
+                title=title,
+                objective=objective,
+                notes=notes,
+                initial_observation_id=init_obs_id,
+            )
+            self.output(f"✓ Mission created: [{m.mission_id[:8]}] {m.title} (Status: {m.status.value.upper()})")
+            open_cockpit = self._ask("Open mission cockpit now? [Y/n]", "Y").strip().lower()
+            if open_cockpit in ("", "y", "yes"):
+                self._mission_cockpit(m)
+        except Exception as exc:
+            self.output(f"✗ Failed to create mission: {exc}")
+
+    def _open_mission_ui(self):
+        m_id_input = self._ask("Mission ID (or prefix)").strip()
+        if not m_id_input:
+            return
+        missions = self.operation_service.list_missions()
+        matched = [m for m in missions if m.mission_id.startswith(m_id_input)]
+        if not matched:
+            self.output(f"Mission not found: {m_id_input}")
+            return
+        self._mission_cockpit(matched[0])
+
+    def _start_mission_ui(self):
+        m_id_input = self._ask("Mission ID (or prefix)").strip()
+        if not m_id_input:
+            return
+        missions = self.operation_service.list_missions()
+        matched = [m for m in missions if m.mission_id.startswith(m_id_input)]
+        if not matched:
+            self.output(f"Mission not found: {m_id_input}")
+            return
+        m = matched[0]
+        try:
+            self.operation_service.start_mission(m.mission_id)
+            self.output(f"✓ Mission [{m.mission_id[:8]}] started (IN_PROGRESS).")
+        except Exception as exc:
+            self.output(f"✗ Failed to start mission: {exc}")
+
+    def _complete_mission_ui(self):
+        m_id_input = self._ask("Mission ID (or prefix)").strip()
+        if not m_id_input:
+            return
+        missions = self.operation_service.list_missions()
+        matched = [m for m in missions if m.mission_id.startswith(m_id_input)]
+        if not matched:
+            self.output(f"Mission not found: {m_id_input}")
+            return
+        m = matched[0]
+        notes = self._ask("Closing notes (optional)", m.notes)
+        try:
+            self.operation_service.complete_mission(m.mission_id, notes=notes or None)
+            self.output(f"✓ Mission [{m.mission_id[:8]}] completed.")
+        except Exception as exc:
+            self.output(f"✗ Failed to complete mission: {exc}")
+
+    def _abort_mission_ui(self):
+        m_id_input = self._ask("Mission ID (or prefix)").strip()
+        if not m_id_input:
+            return
+        missions = self.operation_service.list_missions()
+        matched = [m for m in missions if m.mission_id.startswith(m_id_input)]
+        if not matched:
+            self.output(f"Mission not found: {m_id_input}")
+            return
+        m = matched[0]
+        notes = self._ask("Abort reason / notes (optional)", m.notes)
+        try:
+            self.operation_service.abort_mission(m.mission_id, notes=notes or None)
+            self.output(f"✓ Mission [{m.mission_id[:8]}] aborted.")
+        except Exception as exc:
+            self.output(f"✗ Failed to abort mission: {exc}")
+
+    def _mission_timeline_ui(self):
+        m_id_input = self._ask("Mission ID (or prefix)").strip()
+        if not m_id_input:
+            return
+        missions = self.operation_service.list_missions()
+        matched = [m for m in missions if m.mission_id.startswith(m_id_input)]
+        if not matched:
+            self.output(f"Mission not found: {m_id_input}")
+            return
+        m = matched[0]
+        entries = self.operation_service.get_mission_timeline(m.mission_id)
+        self.output(f"\nMISSION #{m.mission_id[:8]}")
+        self.output(f"Title:   {m.title}")
+        self.output(f"Target:  {m.target_id} ({m.service_protocol.upper()}/{m.service_port})")
+        self.output(f"Status:  {m.status.value.upper()}\n")
+        if not entries:
+            self.output("  (no activity recorded for this mission)")
+        else:
+            self.output(f"  {'TIME':<10} {'CATEGORY':<14} {'EVENT'}")
+            for e in entries:
+                t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+                self.output(f"  {t_str:<10} {e.category:<14} {e.title}")
+        self.output("")
+        self._ask("Press Enter to continue", "")
+
+    def _mission_cockpit(self, m: Mission):
+        while True:
+            # Refresh from database
+            fresh = self.operation_service.get_mission(m.mission_id)
+            if fresh:
+                m = fresh
+
+            tgt = self.target_service.get_target(m.target_id) if self.target_service else None
+            tgt_host = f" ({tgt.host})" if tgt else ""
+
+            self.output(
+                f"\nMISSION #{m.mission_id[:8]}\n"
+                "────────────────────────────────────\n"
+                f"{m.title}\n"
+                f"Target:   {m.target_id}{tgt_host}\n"
+                f"Service:  {m.service_protocol.upper()}/{m.service_port}\n"
+                f"Status:   {m.status.value.upper()}\n\n"
+                "OBJECTIVE\n"
+                f"{m.objective or '-'}\n"
+            )
+
+            # Target Intelligence
+            latest_obs = None
+            if self.target_service:
+                history = self.target_service.history(m.target_id, limit=10)
+                if history:
+                    latest_obs = history[0]
+                    srvs = ", ".join(f"{s.port}/{s.name}" for s in latest_obs.services) if latest_obs.services else "none"
+                    t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(latest_obs.observed_at))
+                    self.output(
+                        "CURRENT INTELLIGENCE\n"
+                        f"Observation: #{latest_obs.id}\n"
+                        f"Services:    {srvs}\n"
+                        f"Status:      {latest_obs.status}\n"
+                        f"Observed:    {t_str}\n"
+                    )
+                else:
+                    self.output("CURRENT INTELLIGENCE\nNo observations recorded for target.\n")
+
+            # Recent Activity
+            entries = self.operation_service.get_mission_timeline(m.mission_id)
+            self.output("RECENT ACTIVITY")
+            if not entries:
+                self.output("  (no activity recorded for this mission)")
+            else:
+                for e in entries[-5:]:
+                    t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+                    self.output(f"  {t_str}  [{e.category:<12}] {e.title} [{e.status}]")
+            self.output("")
+
+            # Flags
+            flags = self.operation_service.list_flags(mission_id=m.mission_id)
+            obs_cnt = len(flags)
+            sub_cnt = sum(1 for f in flags if f.status == FlagStatus.SUBMITTED)
+            self.output(f"FLAGS\n  {obs_cnt} observed\n  {sub_cnt} submitted\n")
+
+            # Health
+            slas = self.operation_service.list_sla(mission_id=m.mission_id, limit=1)
+            last_sla = slas[0].status.value.upper() if slas else "No checks recorded"
+            self.output(f"HEALTH\n  Last local check: {last_sla}\n")
+
+            self.output(
+                "ACTIONS\n"
+                "  1. Record Action\n"
+                "  2. Record Attack\n"
+                "  3. Record Defense\n"
+                "  4. Record Flag\n"
+                "  5. Record Verification\n"
+                "  6. Run Tool\n"
+                "  7. Refresh Intelligence\n"
+                "  8. Compare Observations\n"
+                "  9. Complete Mission\n"
+                "  10. Abort Mission\n"
+                "  0. Back"
+            )
+
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            elif choice == "1":
+                self._cockpit_record_action(m)
+            elif choice == "2":
+                self._cockpit_record_attack(m)
+            elif choice == "3":
+                self._cockpit_record_defense(m)
+            elif choice == "4":
+                self._cockpit_record_flag(m)
+            elif choice == "5":
+                self._cockpit_record_verification(m)
+            elif choice == "6":
+                self._cockpit_run_tool(m)
+            elif choice == "7":
+                self._cockpit_refresh_intelligence(m)
+            elif choice == "8":
+                self._cockpit_compare_observations(m)
+            elif choice == "9":
+                notes = self._ask("Closing notes (optional)", m.notes)
+                try:
+                    self.operation_service.complete_mission(m.mission_id, notes=notes or None)
+                    self.output("✓ Mission completed.")
+                except Exception as exc:
+                    self.output(f"✗ Failed to complete mission: {exc}")
+            elif choice == "10":
+                notes = self._ask("Abort reason / notes (optional)", m.notes)
+                try:
+                    self.operation_service.abort_mission(m.mission_id, notes=notes or None)
+                    self.output("✓ Mission aborted.")
+                except Exception as exc:
+                    self.output(f"✗ Failed to abort mission: {exc}")
+            else:
+                self.output("Invalid selection.")
+
+    def _cockpit_record_action(self, m: Mission):
+        cat_str = self._ask("Category (recon/attack/defense/flag/verification/system)", "recon").lower()
+        try:
+            cat = ActionCategory(cat_str)
+        except ValueError:
+            self.output("Invalid category.")
+            return
+        tool = self._ask("Tool (e.g. manual, nmap, http)", "manual")
+        op = self._ask("Operation", "action")
+        summary = self._ask("Summary")
+        if not summary:
+            self.output("Summary is required.")
+            return
+        status = self._ask("Status", "completed")
+        parent_act_id = None
+        if cat == ActionCategory.VERIFICATION:
+            p_input = self._ask("Parent Action ID (optional)", "").strip()
+            parent_act_id = p_input or None
+
+        sid = self.context.session_id if self.context else ""
+        rnd = self.context.current_round if self.context else 0
+        try:
+            act = self.operation_service.record_action(
+                sid,
+                rnd,
+                cat,
+                tool,
+                op,
+                summary,
+                target_id=m.target_id,
+                status=status,
+                workflow_id=m.workflow_id,
+                mission_id=m.mission_id,
+                parent_action_id=parent_act_id,
+            )
+            self.output(f"✓ Action recorded: [{act.category.value.upper()}] {act.summary}")
+        except Exception as exc:
+            self.output(f"✗ Failed to record action: {exc}")
+
+    def _cockpit_record_attack(self, m: Mission):
+        technique = self._ask("Attack Technique / Exploit Name")
+        if not technique:
+            self.output("Technique is required.")
+            return
+        status_str = self._ask("Status (planned/in_progress/success/failed/aborted)", "success").lower()
+        try:
+            status = AttackStatus(status_str)
+        except ValueError:
+            status = AttackStatus.SUCCESS
+        notes = self._ask("Notes (optional)")
+
+        rnd = self.context.current_round if self.context else 0
+        try:
+            atk = self.operation_service.record_attack(
+                rnd,
+                m.target_id,
+                f"{m.service_protocol}/{m.service_port}",
+                technique,
+                status=status,
+                workflow_id=m.workflow_id,
+                mission_id=m.mission_id,
+                notes=notes,
+            )
+            self.output(f"✓ Attack recorded: [{atk.status.value.upper()}] {atk.method} on {atk.target_id} ({atk.service})")
+        except Exception as exc:
+            self.output(f"✗ Failed to record attack: {exc}")
+
+    def _cockpit_record_defense(self, m: Mission):
+        patch_type = self._ask("Patch / Defense Action (e.g. config_change, firewall, code_fix)", "patch")
+        status_str = self._ask("Status (planned/in_progress/completed/failed/reverted)", "completed").lower()
+        try:
+            status = DefenseStatus(status_str)
+        except ValueError:
+            status = DefenseStatus.COMPLETED
+        notes = self._ask("Notes (optional)")
+
+        rnd = self.context.current_round if self.context else 0
+        try:
+            defn = self.operation_service.record_defense(
+                rnd,
+                m.target_id,
+                f"{m.service_protocol}/{m.service_port}",
+                patch_type,
+                status=status,
+                workflow_id=m.workflow_id,
+                mission_id=m.mission_id,
+                notes=notes,
+            )
+            self.output(f"✓ Defense recorded: [{defn.status.value.upper()}] {defn.action} on {defn.target_id}")
+        except Exception as exc:
+            self.output(f"✗ Failed to record defense: {exc}")
+
+    def _cockpit_record_flag(self, m: Mission):
+        flag_raw = self._ask("Raw Flag (will be hashed, plaintext NEVER stored)")
+        if not flag_raw.strip():
+            self.output("Flag cannot be empty.")
+            return
+        status_str = self._ask("Status (observed/validated/submitted/rejected/expired)", "validated").lower()
+        try:
+            status = FlagStatus(status_str)
+        except ValueError:
+            status = FlagStatus.VALIDATED
+        notes = self._ask("Notes (optional)")
+
+        rnd = self.context.current_round if self.context else 0
+        try:
+            flg = self.operation_service.record_flag(
+                rnd,
+                m.target_id,
+                "manual",
+                flag_raw,
+                status=status,
+                workflow_id=m.workflow_id,
+                mission_id=m.mission_id,
+                notes=notes,
+            )
+            self.output(f"✓ Flag recorded: {flg.flag_preview} (Hash: {flg.fingerprint[:16]}..., Status: {flg.status.value.upper()})")
+        except Exception as exc:
+            self.output(f"✗ Failed to record flag: {exc}")
+
+    def _cockpit_record_verification(self, m: Mission):
+        actions = self.operation_service.list_actions(mission_id=m.mission_id, limit=10)
+        parent_act_id = None
+        if actions:
+            self.output("\nMission Actions for Parent Linking:")
+            for a in actions:
+                self.output(f"  [{a.id[:8]}] [{a.category.value.upper()}] {a.summary}")
+            p_in = self._ask("Select Parent Action ID (or prefix, Enter to skip)", "").strip()
+            if p_in:
+                matched = [a for a in actions if a.id.startswith(p_in)]
+                parent_act_id = matched[0].id if matched else p_in
+
+        tool = self._ask("Verification Tool (e.g. http, nmap, manual)", "manual")
+        summary = self._ask("Verification Summary", "Service verification check")
+        status = self._ask("Verification Result (verified/failed)", "verified")
+
+        sid = self.context.session_id if self.context else ""
+        rnd = self.context.current_round if self.context else 0
+        try:
+            act = self.operation_service.record_action(
+                sid,
+                rnd,
+                ActionCategory.VERIFICATION,
+                tool,
+                "verification",
+                summary,
+                target_id=m.target_id,
+                status=status,
+                workflow_id=m.workflow_id,
+                mission_id=m.mission_id,
+                parent_action_id=parent_act_id,
+            )
+            self.output(f"✓ Verification action recorded: [{act.id[:8]}] {act.summary}")
+        except Exception as exc:
+            self.output(f"✗ Failed to record verification action: {exc}")
+
+        # Optional SLA observation
+        sla_choice = self._ask("Record SLA / health observation for this service? [y/N]", "N").strip().lower()
+        if sla_choice in ("y", "yes"):
+            s_stat_str = self._ask("SLA Status (ok/mumble/offline)", "ok").lower()
+            try:
+                s_stat = SlaStatus(s_stat_str)
+            except ValueError:
+                s_stat = SlaStatus.OK
+            lat_str = self._ask("Latency ms (optional)", "0")
+            try:
+                lat = float(lat_str)
+            except ValueError:
+                lat = None
+            notes = self._ask("Notes (optional)", "")
+            try:
+                sla = self.operation_service.record_sla(
+                    rnd,
+                    m.target_id,
+                    f"{m.service_protocol}/{m.service_port}",
+                    s_stat,
+                    latency_ms=lat,
+                    workflow_id=m.workflow_id,
+                    mission_id=m.mission_id,
+                    details={"notes": notes} if notes else {},
+                )
+                self.output(f"✓ SLA observation recorded: [{sla.status.value.upper()}] for {sla.service}")
+            except Exception as exc:
+                self.output(f"✗ Failed to record SLA: {exc}")
+
+        # Optional intelligence refresh
+        intel_choice = self._ask("Run new intelligence scan now? [y/N]", "N").strip().lower()
+        if intel_choice in ("y", "yes"):
+            self._cockpit_refresh_intelligence(m)
+
+    def _cockpit_run_tool(self, m: Mission):
+        self.output(
+            "\nRUN OPERATOR TOOL\n"
+            "────────────────────────────\n"
+            f"  1. Nmap port scan (port {m.service_port})\n"
+            f"  2. HTTP check (GET on port {m.service_port})\n"
+            "  3. Open Tool Menu\n"
+            "  0. Cancel"
+        )
+        choice = self._ask("Select", "0")
+        if choice == "0":
+            return
+        elif choice == "1":
+            tgt = self.target_service.get_target(m.target_id) if self.target_service else None
+            host = tgt.host if tgt else m.target_id
+            if self.scope and not self.scope.is_allowed(host):
+                self.output(f"✗ Scope rejection: host '{host}' is outside authorized scope.")
+                return
+            try:
+                res, services = self.nmap_service.scan_target_detailed(host, ports=[m.service_port])
+                if res.success:
+                    srv_lines = "\n".join(f"  {s.port}/{s.protocol:<4} {s.name:<12} {s.version}".rstrip() for s in services) or "  (none open)"
+                    self._present_success("Nmap", host, res.duration_s, f"Open Services:\n{srv_lines}")
+                else:
+                    self._present_failure("Nmap", host, res.duration_s, res.error_kind or "nonzero_exit", res.stderr or res.error or "")
+
+                rec_choice = self._ask(f"Record as action under Mission #{m.mission_id[:8]}? [y/N]", "N").lower()
+                if rec_choice in ("y", "yes"):
+                    cat_str = self._ask("Category (recon/verification/attack/defense)", "recon").lower()
+                    try:
+                        cat = ActionCategory(cat_str)
+                    except ValueError:
+                        cat = ActionCategory.RECON
+                    sum_str = self._ask("Summary", f"Nmap scan port {m.service_port} on {host}")
+                    sid = self.context.session_id if self.context else ""
+                    rnd = self.context.current_round if self.context else 0
+                    self.operation_service.record_action(
+                        sid, rnd, cat, "nmap", "scan", sum_str,
+                        target_id=m.target_id,
+                        status="completed" if res.success else "failed",
+                        workflow_id=m.workflow_id,
+                        mission_id=m.mission_id,
+                        details={"ports": [m.service_port], "duration_s": res.duration_s},
+                    )
+                    self.output("✓ Action recorded under mission.")
+            except Exception as exc:
+                self.output(f"✗ Tool execution failed: {exc}")
+        elif choice == "2":
+            tgt = self.target_service.get_target(m.target_id) if self.target_service else None
+            host = tgt.host if tgt else m.target_id
+            url = f"http://{host}:{m.service_port}/"
+            if self.scope and not self.scope.is_allowed(host):
+                self.output(f"✗ Scope rejection: host '{host}' is outside authorized scope.")
+                return
+            try:
+                res, resp = self.http_service.adapter.execute(
+                    HttpRequest(url=url, method="GET", timeout_s=5.0)
+                )
+                if resp.status_code > 0:
+                    self._present_success("HTTP", url, res.duration_s, f"Status: {resp.status_code} {resp.reason}\nBody:\n{resp.body[:500]}")
+                else:
+                    self._present_failure("HTTP", url, res.duration_s, res.error_kind or "nonzero_exit", res.stderr or res.error or "")
+
+                rec_choice = self._ask(f"Record as action under Mission #{m.mission_id[:8]}? [y/N]", "N").lower()
+                if rec_choice in ("y", "yes"):
+                    cat_str = self._ask("Category (recon/verification/attack/defense)", "verification").lower()
+                    try:
+                        cat = ActionCategory(cat_str)
+                    except ValueError:
+                        cat = ActionCategory.VERIFICATION
+                    sum_str = self._ask("Summary", f"HTTP GET {url} -> {resp.status_code}")
+                    sid = self.context.session_id if self.context else ""
+                    rnd = self.context.current_round if self.context else 0
+                    self.operation_service.record_action(
+                        sid, rnd, cat, "http", "get", sum_str,
+                        target_id=m.target_id,
+                        status="completed" if res.success else "failed",
+                        workflow_id=m.workflow_id,
+                        mission_id=m.mission_id,
+                        details={"url": url, "status_code": resp.status_code, "duration_s": res.duration_s},
+                    )
+                    self.output("✓ Action recorded under mission.")
+            except Exception as exc:
+                self.output(f"✗ HTTP execution failed: {exc}")
+        elif choice == "3":
+            self._tools_menu()
+
+    def _cockpit_refresh_intelligence(self, m: Mission):
+        if self.recon_service is None or self.scope is None:
+            self.output("Scan is not configured (missing recon_service or scope).")
+            return
+        tgt = self.target_service.get_target(m.target_id) if self.target_service else None
+        if not tgt:
+            self.output(f"Target not found: {m.target_id}")
+            return
+        try:
+            obs = self.recon_service.scan_target(
+                tgt,
+                self.scope,
+                ports=[m.service_port],
+                session_id=self.context.session_id if self.context else "",
+                round_id=self.context.current_round if self.context else 0,
+            )
+            self._show_observation(obs)
+            history = self.target_service.history(tgt.id)
+            if len(history) > 1:
+                intel = diff_history(history)
+                self.output(
+                    f"Changes since observation #{intel.previous_id}:\n{intel.render()}"
+                    if intel and intel.entries
+                    else "No intelligence changes since the previous observation."
+                )
+            else:
+                self.output("First observation recorded for this target.")
+        except ValueError as exc:
+            self.output(f"Scope/Target rejection: {exc}")
+        except Exception as exc:
+            self.output(f"Scan failed: {exc}")
+
+    def _cockpit_compare_observations(self, m: Mission):
+        if not self.target_service:
+            self.output("Target service not configured.")
+            return
+        history = self.target_service.history(m.target_id)
+        if not history:
+            self.output("No observations found for this target.")
+            return
+        if len(history) < 2:
+            self.output(f"Only {len(history)} observation(s) available. Need at least 2 to compare.")
+            return
+        self.output("Observations:\n" + "\n".join(f"  #{o.id}  round={o.round_id}  status={o.status}" for o in history))
+        try:
+            older_id = int(self._ask("Older observation ID"))
+            newer_id = int(self._ask("Newer observation ID"))
+        except ValueError:
+            self.output("Invalid observation ID.")
+            return
+        observations = {o.id: o for o in history}
+        if older_id not in observations or newer_id not in observations:
+            self.output("Observation not found in target history.")
+            return
+        self.output(compare_observations(observations[older_id], observations[newer_id]).render())
 
     def _ad_knowledge(self):
         articles = list_ad_articles()

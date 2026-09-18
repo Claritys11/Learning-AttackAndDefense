@@ -169,6 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     pact.add_argument("--workflow", default=None, help="workflow ID to associate action with")
     pact.add_argument("--parent", "--parent-action", dest="parent_action_id", default=None, help="parent action ID (e.g. for defense verification)")
     pact.add_argument("--tool-exec", dest="tool_execution_id", default=None, help="tool execution ID")
+    pact.add_argument("--mission", default=None, help="mission ID to associate action with")
     pact.add_argument("--list", action="store_true")
     pact.add_argument("--json", action="store_true")
 
@@ -180,6 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
     patk.add_argument("--status", choices=["planned", "in_progress", "success", "failed", "aborted"], default="planned")
     patk.add_argument("--notes", default="")
     patk.add_argument("--workflow", default=None, help="workflow ID to associate attack with")
+    patk.add_argument("--mission", default=None, help="mission ID to associate attack with")
     patk.add_argument("--update", dest="update_id", default=None, help="attack ID to update")
     patk.add_argument("--round", type=int, default=None)
     patk.add_argument("--list", action="store_true")
@@ -193,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     pdf.add_argument("--status", choices=["planned", "in_progress", "completed", "failed", "reverted"], default="planned")
     pdf.add_argument("--notes", default="")
     pdf.add_argument("--workflow", default=None, help="workflow ID to associate defense with")
+    pdf.add_argument("--mission", default=None, help="mission ID to associate defense with")
     pdf.add_argument("--update", dest="update_id", default=None, help="defense ID to update")
     pdf.add_argument("--round", type=int, default=None)
     pdf.add_argument("--list", action="store_true")
@@ -205,6 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
     pfl.add_argument("--status", choices=["observed", "validated", "submitted", "rejected", "expired"], default="observed")
     pfl.add_argument("--notes", default="")
     pfl.add_argument("--workflow", default=None, help="workflow ID to associate flag with")
+    pfl.add_argument("--mission", default=None, help="mission ID to associate flag with")
     pfl.add_argument("--update", dest="update_id", default=None, help="flag ID to update")
     pfl.add_argument("--round", type=int, default=None)
     pfl.add_argument("--list", action="store_true")
@@ -218,6 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     psla.add_argument("--latency", type=float, default=None, help="observed latency in ms")
     psla.add_argument("--source", default="local")
     psla.add_argument("--workflow", default=None, help="workflow ID to associate SLA observation with")
+    psla.add_argument("--mission", default=None, help="mission ID to associate SLA observation with")
     psla.add_argument("--round", type=int, default=None)
     psla.add_argument("--list", action="store_true")
     psla.add_argument("--json", action="store_true")
@@ -226,6 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     ptl.add_argument("--round", type=int, default=None)
     ptl.add_argument("--target", default=None)
     ptl.add_argument("--workflow", default=None, help="filter timeline by workflow ID")
+    ptl.add_argument("--mission", default=None, help="filter timeline by mission ID")
     ptl.add_argument("--limit", type=int, default=50)
     ptl.add_argument("--json", action="store_true")
 
@@ -243,6 +249,25 @@ def build_parser() -> argparse.ArgumentParser:
     pwf.add_argument("--abort", default=None, help="workflow ID to abort")
     pwf.add_argument("--timeline", default=None, help="show timeline for workflow ID")
     pwf.add_argument("--json", action="store_true")
+
+    pm = sub.add_parser("mission", help="create, manage, or list operator missions")
+    pm.add_argument("--create", action="store_true", help="create a new mission")
+    pm.add_argument("--workflow", default=None, help="workflow ID")
+    pm.add_argument("--target", default=None, help="target ID")
+    pm.add_argument("--port", type=int, default=None, help="service port")
+    pm.add_argument("--protocol", default="tcp", choices=["tcp", "udp"], help="service protocol")
+    pm.add_argument("--title", default="", help="mission title")
+    pm.add_argument("--objective", default="", help="mission objective")
+    pm.add_argument("--notes", default="", help="mission notes")
+    pm.add_argument("--observation-id", dest="observation_id", type=int, default=None, help="initial observation ID")
+    pm.add_argument("--list", action="store_true", help="list missions")
+    pm.add_argument("--status", choices=["open", "in_progress", "completed", "aborted"], default=None, help="filter by status")
+    pm.add_argument("--show", default=None, help="mission ID to show")
+    pm.add_argument("--start", default=None, help="mission ID to start")
+    pm.add_argument("--complete", default=None, help="mission ID to complete")
+    pm.add_argument("--abort", default=None, help="mission ID to abort")
+    pm.add_argument("--timeline", default=None, help="show timeline for mission ID")
+    pm.add_argument("--json", action="store_true")
 
     return p
 
@@ -558,25 +583,29 @@ def main(argv=None) -> int:
                 workflow_id=getattr(args, "workflow", None),
                 parent_action_id=getattr(args, "parent_action_id", None),
                 tool_execution_id=getattr(args, "tool_execution_id", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps(act.__dict__, default=str, indent=2))
             else:
                 wf_str = f" [WF: {act.workflow_id[:8]}]" if act.workflow_id else ""
-                print(f"Action [{act.category.value.upper()}]{wf_str} recorded: {act.summary} (ID: {act.id[:8]})")
+                ms_str = f" [MS: {act.mission_id[:8]}]" if act.mission_id else ""
+                print(f"Action [{act.category.value.upper()}]{wf_str}{ms_str} recorded: {act.summary} (ID: {act.id[:8]})")
             return 0
         else:
             actions = ops.list_actions(
                 round_id=args.round,
                 target_id=args.target,
                 workflow_id=getattr(args, "workflow", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps([a.__dict__ for a in actions], default=str, indent=2))
             else:
                 for a in actions:
                     wf_str = f" [WF:{a.workflow_id[:8]}]" if a.workflow_id else ""
-                    print(f"[{a.category.value.upper():<12}]\t{a.target_id or '-'}\t{a.summary}{wf_str}\t({a.status})")
+                    ms_str = f" [MS:{a.mission_id[:8]}]" if a.mission_id else ""
+                    print(f"[{a.category.value.upper():<12}]\t{a.target_id or '-'}\t{a.summary}{wf_str}{ms_str}\t({a.status})")
             return 0
 
     if args.command == "attack":
@@ -597,12 +626,14 @@ def main(argv=None) -> int:
                 status=st,
                 notes=args.notes,
                 workflow_id=getattr(args, "workflow", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps(atk.__dict__, default=str, indent=2))
             else:
                 wf_str = f" [WF: {atk.workflow_id[:8]}]" if atk.workflow_id else ""
-                print(f"Attack [{atk.id[:8]}]{wf_str} recorded against {atk.target_id} ({atk.status.value})")
+                ms_str = f" [MS: {atk.mission_id[:8]}]" if atk.mission_id else ""
+                print(f"Attack [{atk.id[:8]}]{wf_str}{ms_str} recorded against {atk.target_id} ({atk.status.value})")
             return 0
         elif args.update_id:
             st = AttackStatus(args.status)
@@ -617,13 +648,15 @@ def main(argv=None) -> int:
                 round_id=args.round,
                 target_id=args.target,
                 workflow_id=getattr(args, "workflow", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps([a.__dict__ for a in attacks], default=str, indent=2))
             else:
                 for a in attacks:
                     wf_str = f" [WF:{a.workflow_id[:8]}]" if a.workflow_id else ""
-                    print(f"[{a.id[:8]}]\t{a.target_id}\t{a.service}\t{a.status.value}\t{a.method}{wf_str}")
+                    ms_str = f" [MS:{a.mission_id[:8]}]" if a.mission_id else ""
+                    print(f"[{a.id[:8]}]\t{a.target_id}\t{a.service}\t{a.status.value}\t{a.method}{wf_str}{ms_str}")
             return 0
 
     if args.command == "defense":
@@ -644,12 +677,14 @@ def main(argv=None) -> int:
                 status=st,
                 notes=args.notes,
                 workflow_id=getattr(args, "workflow", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps(df.__dict__, default=str, indent=2))
             else:
                 wf_str = f" [WF: {df.workflow_id[:8]}]" if df.workflow_id else ""
-                print(f"Defense [{df.id[:8]}]{wf_str} recorded for {df.target_id} ({df.status.value})")
+                ms_str = f" [MS: {df.mission_id[:8]}]" if df.mission_id else ""
+                print(f"Defense [{df.id[:8]}]{wf_str}{ms_str} recorded for {df.target_id} ({df.status.value})")
             return 0
         elif args.update_id:
             st = DefenseStatus(args.status)
@@ -664,13 +699,15 @@ def main(argv=None) -> int:
                 round_id=args.round,
                 target_id=args.target,
                 workflow_id=getattr(args, "workflow", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps([d.__dict__ for d in defenses], default=str, indent=2))
             else:
                 for d in defenses:
                     wf_str = f" [WF:{d.workflow_id[:8]}]" if d.workflow_id else ""
-                    print(f"[{d.id[:8]}]\t{d.target_id}\t{d.service}\t{d.status.value}\t{d.action}{wf_str}")
+                    ms_str = f" [MS:{d.mission_id[:8]}]" if d.mission_id else ""
+                    print(f"[{d.id[:8]}]\t{d.target_id}\t{d.service}\t{d.status.value}\t{d.action}{wf_str}{ms_str}")
             return 0
 
     if args.command == "flag":
@@ -691,12 +728,14 @@ def main(argv=None) -> int:
                 status=st,
                 notes=args.notes,
                 workflow_id=getattr(args, "workflow", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps(fl.__dict__, default=str, indent=2))
             else:
                 wf_str = f" [WF: {fl.workflow_id[:8]}]" if fl.workflow_id else ""
-                print(f"Flag [{fl.id[:8]}]{wf_str} recorded: {fl.flag_preview} (status: {fl.status.value})")
+                ms_str = f" [MS: {fl.mission_id[:8]}]" if fl.mission_id else ""
+                print(f"Flag [{fl.id[:8]}]{wf_str}{ms_str} recorded: {fl.flag_preview} (status: {fl.status.value})")
             return 0
         elif args.update_id:
             st = FlagStatus(args.status)
@@ -711,13 +750,15 @@ def main(argv=None) -> int:
                 round_id=args.round,
                 target_id=args.target,
                 workflow_id=getattr(args, "workflow", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps([f.__dict__ for f in flags], default=str, indent=2))
             else:
                 for f in flags:
                     wf_str = f" [WF:{f.workflow_id[:8]}]" if f.workflow_id else ""
-                    print(f"[{f.id[:8]}]\t{f.target_id}\t{f.flag_preview}\t{f.status.value}\t{f.source}{wf_str}")
+                    ms_str = f" [MS:{f.mission_id[:8]}]" if f.mission_id else ""
+                    print(f"[{f.id[:8]}]\t{f.target_id}\t{f.flag_preview}\t{f.status.value}\t{f.source}{wf_str}{ms_str}")
             return 0
 
     if args.command == "sla":
@@ -738,19 +779,22 @@ def main(argv=None) -> int:
                 latency_ms=args.latency,
                 source=args.source,
                 workflow_id=getattr(args, "workflow", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps(sla_rec.__dict__, default=str, indent=2))
             else:
                 lat = f"{sla_rec.latency_ms:.0f}ms" if sla_rec.latency_ms is not None else "n/a"
                 wf_str = f" [WF: {sla_rec.workflow_id[:8]}]" if sla_rec.workflow_id else ""
-                print(f"SLA recorded{wf_str}: {sla_rec.target_id} {sla_rec.service} -> {sla_rec.status.value} ({lat})")
+                ms_str = f" [MS: {sla_rec.mission_id[:8]}]" if sla_rec.mission_id else ""
+                print(f"SLA recorded{wf_str}{ms_str}: {sla_rec.target_id} {sla_rec.service} -> {sla_rec.status.value} ({lat})")
             return 0
         else:
             sla_list = ops.list_sla(
                 round_id=args.round,
                 target_id=args.target,
                 workflow_id=getattr(args, "workflow", None),
+                mission_id=getattr(args, "mission", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps([s.__dict__ for s in sla_list], default=str, indent=2))
@@ -758,13 +802,37 @@ def main(argv=None) -> int:
                 for s in sla_list:
                     lat = f"{s.latency_ms:.0f}ms" if s.latency_ms is not None else "n/a"
                     wf_str = f" [WF:{s.workflow_id[:8]}]" if s.workflow_id else ""
-                    print(f"{s.target_id}\t{s.service}\t{s.status.value}\t{lat}\t({s.source}){wf_str}")
+                    ms_str = f" [MS:{s.mission_id[:8]}]" if s.mission_id else ""
+                    print(f"{s.target_id}\t{s.service}\t{s.status.value}\t{lat}\t({s.source}){wf_str}{ms_str}")
             return 0
 
     if args.command == "timeline":
         from .operations import OperationService
         from .targets import TargetService
         ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        ms_id = getattr(args, "mission", None)
+        if ms_id:
+            m = ops.get_mission(ms_id)
+            if not m:
+                raise SystemExit(f"Mission not found: {ms_id}")
+            entries = ops.get_mission_timeline(ms_id, limit=args.limit)
+            if getattr(args, "json", False):
+                print(json.dumps([e.__dict__ for e in entries], default=str, indent=2))
+            else:
+                print(f"MISSION #{m.mission_id[:8]}")
+                print(f"{m.title}")
+                print(f"Target: {m.target_id}\tService: {m.service_protocol.upper()}:{m.service_port}")
+                print(f"Status: {m.status.value.upper()}")
+                print()
+                if not entries:
+                    print("(no activity recorded for this mission)")
+                else:
+                    print(f"{'TIME':<10}\t{'CATEGORY':<14}\t{'EVENT'}")
+                    for e in entries:
+                        t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+                        print(f"{t_str:<10}\t{e.category:<14}\t{e.title}")
+            return 0
+
         wf_id = getattr(args, "workflow", None)
         if wf_id:
             wf = ops.get_workflow(wf_id)
@@ -891,6 +959,110 @@ def main(argv=None) -> int:
                     for w in workflows:
                         tgt = f"[{w.target_id}]" if w.target_id else ""
                         print(f"[{w.workflow_id[:8]}]\t{w.status.value.upper():<10}\tR#{w.round_id}\t{tgt}\t{w.title}")
+            return 0
+
+    if args.command == "mission":
+        from .operations import MissionStatus, OperationService
+        from .targets import TargetService
+        ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+
+        if args.create:
+            if not args.workflow or not args.target or args.port is None:
+                raise SystemExit("mission --create requires --workflow <workflow_id> --target <target_id> --port <port>")
+            m = ops.create_mission(
+                workflow_id=args.workflow,
+                target_id=args.target,
+                service_port=args.port,
+                title=args.title or f"Mission {args.target}:{args.port}",
+                service_protocol=args.protocol or "tcp",
+                objective=args.objective or "",
+                notes=args.notes or "",
+                initial_observation_id=args.observation_id,
+            )
+            if getattr(args, "json", False):
+                print(json.dumps(m.__dict__, default=str, indent=2))
+            else:
+                print(f"Mission [{m.mission_id[:8]}] created: {m.title} (Status: {m.status.value})")
+            return 0
+
+        elif args.show:
+            m = ops.get_mission(args.show)
+            if not m:
+                raise SystemExit(f"Mission not found: {args.show}")
+            if getattr(args, "json", False):
+                print(json.dumps(m.__dict__, default=str, indent=2))
+            else:
+                print(f"MISSION #{m.mission_id[:8]}")
+                print(f"Title:     {m.title}")
+                print(f"Workflow:  #{m.workflow_id[:8]}")
+                print(f"Target:    {m.target_id}")
+                print(f"Service:   {m.service_protocol.upper()}/{m.service_port}")
+                print(f"Status:    {m.status.value.upper()}")
+                print(f"Objective: {m.objective or '-'}")
+                if m.initial_observation_id:
+                    print(f"Init Obs:  #{m.initial_observation_id}")
+                if m.notes:
+                    print(f"Notes:     {m.notes}")
+            return 0
+
+        elif args.start:
+            ok = ops.start_mission(args.start)
+            if getattr(args, "json", False):
+                print(json.dumps({"mission_id": args.start, "started": ok, "status": "in_progress"}))
+            else:
+                print(f"Mission [{args.start[:8]}] started: {ok}")
+            return 0
+
+        elif args.complete:
+            ok = ops.complete_mission(args.complete, notes=args.notes or None)
+            if getattr(args, "json", False):
+                print(json.dumps({"mission_id": args.complete, "completed": ok, "status": "completed"}))
+            else:
+                print(f"Mission [{args.complete[:8]}] completed: {ok}")
+            return 0
+
+        elif args.abort:
+            ok = ops.abort_mission(args.abort, notes=args.notes or None)
+            if getattr(args, "json", False):
+                print(json.dumps({"mission_id": args.abort, "aborted": ok, "status": "aborted"}))
+            else:
+                print(f"Mission [{args.abort[:8]}] aborted: {ok}")
+            return 0
+
+        elif args.timeline:
+            m = ops.get_mission(args.timeline)
+            if not m:
+                raise SystemExit(f"Mission not found: {args.timeline}")
+            entries = ops.get_mission_timeline(args.timeline)
+            if getattr(args, "json", False):
+                print(json.dumps([e.__dict__ for e in entries], default=str, indent=2))
+            else:
+                print(f"MISSION #{m.mission_id[:8]}")
+                print(f"{m.title}")
+                print(f"Target: {m.target_id}\tService: {m.service_protocol.upper()}:{m.service_port}")
+                print(f"Status: {m.status.value.upper()}")
+                print()
+                if not entries:
+                    print("(no activity recorded for this mission)")
+                else:
+                    print(f"{'TIME':<10}\t{'CATEGORY':<14}\t{'EVENT'}")
+                    for e in entries:
+                        t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+                        print(f"{t_str:<10}\t{e.category:<14}\t{e.title}")
+            return 0
+
+        else:
+            st = MissionStatus(args.status) if args.status else None
+            missions = ops.list_missions(workflow_id=args.workflow, target_id=args.target, status=st)
+            if getattr(args, "json", False):
+                print(json.dumps([m.__dict__ for m in missions], default=str, indent=2))
+            else:
+                if not missions:
+                    print("(no missions found)")
+                else:
+                    for m in missions:
+                        svc_str = f"{m.service_protocol.upper()}:{m.service_port}"
+                        print(f"[{m.mission_id[:8]}]\t{m.status.value.upper():<12}\t[{m.target_id}]\t{svc_str:<10}\t{m.title}")
             return 0
 
     return 1

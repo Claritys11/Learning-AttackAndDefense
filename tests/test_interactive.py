@@ -1,6 +1,7 @@
 import tempfile
 from attnndef.context import ContextStore, OperatorContext
 from attnndef.integrations import NmapAdapter, ReconService, ToolResult
+from attnndef.operations import OperationService
 from attnndef.targets import Role, Scope, Service, Target, TargetService
 from attnndef.ui import InteractiveConsole
 
@@ -88,8 +89,8 @@ def test_ad_and_gzctf_knowledge_console():
         store = ContextStore(f"{d}/state.db")
         store.save(OperatorContext(operator_name="Kai"))
 
-        # Test A&D menu (3) -> select Knowledge Base (9) -> select article 1 -> Back (0) -> Back (0) -> Exit (0)
-        answers = iter(["3", "9", "1", "0", "0", "0"])
+        # Test A&D menu (3) -> select Knowledge Base (10) -> select article 1 -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["3", "10", "1", "0", "0", "0"])
         output = []
         console = InteractiveConsole(store, lambda _p: next(answers), output.append)
         console.run()
@@ -308,3 +309,62 @@ def test_interactive_workflow_console():
         assert "Workflow started:" in text
         assert "Investigate web" in text
         assert "WORKFLOW LIST" in text
+
+
+def test_interactive_mission_cockpit_flow():
+    with tempfile.TemporaryDirectory() as d:
+        db_path = f"{d}/state.db"
+        store = ContextStore(db_path)
+        store.save(OperatorContext(operator_name="Kai", selected_target="enemy-03", current_round=1, session_id="sess-cockpit"))
+        targets = TargetService(db_path)
+        targets.add_target(Target("enemy-03", "enemy-03", "10.0.0.13", Role.ENEMY))
+
+        svc = OperationService(db_path, target_service=targets)
+        svc.create_session(session_id="sess-cockpit", operator="Kai")
+        svc.start_round("sess-cockpit", 1)
+        wf = svc.create_workflow("sess-cockpit", 1, "Investigate web", target_id="enemy-03")
+
+        # Flow:
+        # A&D (3) -> Missions (9)
+        # List (1)
+        # Create (2) -> wf.workflow_id[:8] -> "" (def target: enemy-03) -> "8080" -> "tcp" -> "HTTP Inspection" -> "Probe endpoints" -> "" (notes) -> "y" (open cockpit)
+        # In Cockpit:
+        # 1: Record Action -> "recon" -> "nmap" -> "port_scan" -> "Scan 8080" -> "completed"
+        # 2: Record Attack -> "traversal" -> "success" -> "poc worked"
+        # 3: Record Defense -> "filter" -> "completed" -> "patched"
+        # 4: Record Flag -> "flag{cockpit_flag_test}" -> "validated" -> "captured"
+        # 5: Record Verification -> "" -> "manual" -> "Verify patch" -> "verified" -> "n" (SLA) -> "n" (scan)
+        # 9: Complete Mission -> "Mission completed successfully"
+        # 0: Back
+        # 0: Back (from missions menu)
+        # 0: Back (from A&D menu)
+        # 0: Exit (from main menu)
+        answers = iter([
+            "3", "9",
+            "1",
+            "2", wf.workflow_id[:8], "", "8080", "tcp", "HTTP Inspection", "Probe endpoints", "", "y",
+            "1", "recon", "nmap", "port_scan", "Scan 8080", "completed",
+            "2", "traversal", "success", "poc worked",
+            "3", "filter", "completed", "patched",
+            "4", "flag{cockpit_flag_test}", "validated", "captured",
+            "5", "", "manual", "Verify patch", "verified", "n", "n",
+            "9", "Mission completed successfully",
+            "0",
+            "0", "0", "0"
+        ])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append)
+        console.run()
+        text = "\n".join(output)
+
+        assert "MISSIONS" in text
+        assert "✓ Mission created:" in text
+        assert "HTTP Inspection" in text
+        assert "Target:   enemy-03" in text
+        assert "Service:  TCP/8080" in text
+        assert "✓ Action recorded: [RECON] Scan 8080" in text
+        assert "✓ Attack recorded: [SUCCESS] traversal on enemy-03 (tcp/8080)" in text
+        assert "✓ Defense recorded: [COMPLETED] filter on enemy-03" in text
+        assert "✓ Flag recorded:" in text
+        assert "✓ Verification action recorded:" in text
+        assert "✓ Mission completed." in text

@@ -14,6 +14,8 @@ from .models import (
     DefenseStatus,
     FlagRecord,
     FlagStatus,
+    Mission,
+    MissionStatus,
     OperatorAction,
     Round,
     RoundStatus,
@@ -161,6 +163,22 @@ class OperationService:
                 FOREIGN KEY(round_id) REFERENCES operational_rounds(round_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS operational_missions (
+                mission_id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                service_port INTEGER NOT NULL,
+                service_protocol TEXT NOT NULL DEFAULT 'tcp',
+                title TEXT NOT NULL,
+                objective TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                completed_at REAL,
+                notes TEXT NOT NULL DEFAULT '',
+                initial_observation_id INTEGER,
+                FOREIGN KEY(workflow_id) REFERENCES operational_workflows(workflow_id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_operator_actions_round ON operator_actions(round_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_operator_actions_target ON operator_actions(target_id);
             CREATE INDEX IF NOT EXISTS idx_attack_records_round ON attack_records(round_id);
@@ -171,6 +189,9 @@ class OperationService:
             CREATE INDEX IF NOT EXISTS idx_workflows_round ON operational_workflows(round_id);
             CREATE INDEX IF NOT EXISTS idx_workflows_target ON operational_workflows(target_id);
             CREATE INDEX IF NOT EXISTS idx_workflows_status ON operational_workflows(status);
+            CREATE INDEX IF NOT EXISTS idx_missions_workflow ON operational_missions(workflow_id);
+            CREATE INDEX IF NOT EXISTS idx_missions_target ON operational_missions(target_id);
+            CREATE INDEX IF NOT EXISTS idx_missions_status ON operational_missions(status);
             """)
 
             def _migrate_col(table: str, col: str, col_type: str):
@@ -182,17 +203,27 @@ class OperationService:
             _migrate_col("operator_actions", "workflow_id", "TEXT")
             _migrate_col("operator_actions", "parent_action_id", "TEXT")
             _migrate_col("operator_actions", "tool_execution_id", "TEXT")
+            _migrate_col("operator_actions", "mission_id", "TEXT")
             _migrate_col("attack_records", "workflow_id", "TEXT")
+            _migrate_col("attack_records", "mission_id", "TEXT")
             _migrate_col("defense_records", "workflow_id", "TEXT")
+            _migrate_col("defense_records", "mission_id", "TEXT")
             _migrate_col("flag_records", "workflow_id", "TEXT")
+            _migrate_col("flag_records", "mission_id", "TEXT")
             _migrate_col("sla_observations", "workflow_id", "TEXT")
+            _migrate_col("sla_observations", "mission_id", "TEXT")
 
             db.execute("CREATE INDEX IF NOT EXISTS idx_actions_workflow ON operator_actions(workflow_id)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_actions_parent ON operator_actions(parent_action_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_actions_mission ON operator_actions(mission_id)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_attacks_workflow ON attack_records(workflow_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_attacks_mission ON attack_records(mission_id)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_defenses_workflow ON defense_records(workflow_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_defenses_mission ON defense_records(mission_id)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_flags_workflow ON flag_records(workflow_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_flags_mission ON flag_records(mission_id)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_sla_workflow ON sla_observations(workflow_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_sla_mission ON sla_observations(mission_id)")
 
     def _validate_target(self, target_id: str | None):
         if not target_id:
@@ -464,8 +495,28 @@ class OperationService:
         workflow_id: str | None = None,
         parent_action_id: str | None = None,
         tool_execution_id: str | None = None,
+        mission_id: str | None = None,
     ) -> OperatorAction:
         self._validate_target(target_id)
+        if mission_id:
+            mission = self.get_mission(mission_id)
+            if not mission:
+                raise ValueError(f"Mission not found: {mission_id}")
+            if target_id and target_id != mission.target_id:
+                raise ValueError(
+                    f"Cross-target attachment rejected: action target {target_id} != mission target {mission.target_id}"
+                )
+            target_id = target_id or mission.target_id
+            if workflow_id and workflow_id != mission.workflow_id:
+                raise ValueError(
+                    f"Cross-workflow attachment rejected: action workflow {workflow_id} != mission workflow {mission.workflow_id}"
+                )
+            workflow_id = workflow_id or mission.workflow_id
+            wf = self.get_workflow(mission.workflow_id)
+            if wf and wf.session_id != session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: action session {session_id} != mission session {wf.session_id}"
+                )
         if workflow_id:
             wf = self.get_workflow(workflow_id)
             if not wf:
@@ -487,8 +538,8 @@ class OperationService:
                 """INSERT INTO operator_actions(
                     id, session_id, round_id, timestamp, category, target_id,
                     tool, operation, summary, status, evidence_id, details,
-                    workflow_id, parent_action_id, tool_execution_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    workflow_id, parent_action_id, tool_execution_id, mission_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     action_id,
                     session_id,
@@ -505,6 +556,7 @@ class OperationService:
                     workflow_id,
                     parent_action_id,
                     tool_execution_id,
+                    mission_id,
                 ),
             )
         return OperatorAction(
@@ -523,6 +575,7 @@ class OperationService:
             workflow_id=workflow_id,
             parent_action_id=parent_action_id,
             tool_execution_id=tool_execution_id,
+            mission_id=mission_id,
         )
 
     def get_action(self, action_id: str) -> OperatorAction | None:
@@ -547,6 +600,7 @@ class OperationService:
             workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
             parent_action_id=row["parent_action_id"] if "parent_action_id" in keys else None,
             tool_execution_id=row["tool_execution_id"] if "tool_execution_id" in keys else None,
+            mission_id=row["mission_id"] if "mission_id" in keys else None,
         )
 
     def list_actions(
@@ -555,6 +609,7 @@ class OperationService:
         target_id: str | None = None,
         category: ActionCategory | None = None,
         workflow_id: str | None = None,
+        mission_id: str | None = None,
         limit: int = 100,
     ) -> list[OperatorAction]:
         query = "SELECT * FROM operator_actions WHERE 1=1"
@@ -571,6 +626,9 @@ class OperationService:
         if workflow_id is not None:
             query += " AND workflow_id = ?"
             params.append(workflow_id)
+        if mission_id is not None:
+            query += " AND mission_id = ?"
+            params.append(mission_id)
         query += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
 
@@ -593,6 +651,7 @@ class OperationService:
                 workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
                 parent_action_id=r["parent_action_id"] if "parent_action_id" in r.keys() else None,
                 tool_execution_id=r["tool_execution_id"] if "tool_execution_id" in r.keys() else None,
+                mission_id=r["mission_id"] if "mission_id" in r.keys() else None,
             )
             for r in rows
         ]
@@ -611,8 +670,28 @@ class OperationService:
         evidence_id: str | None = None,
         workflow_id: str | None = None,
         started_at: float | None = None,
+        mission_id: str | None = None,
     ) -> AttackRecord:
         self._validate_target(target_id)
+        if mission_id:
+            mission = self.get_mission(mission_id)
+            if not mission:
+                raise ValueError(f"Mission not found: {mission_id}")
+            if target_id != mission.target_id:
+                raise ValueError(
+                    f"Cross-target attachment rejected: attack target {target_id} != mission target {mission.target_id}"
+                )
+            if workflow_id and workflow_id != mission.workflow_id:
+                raise ValueError(
+                    f"Cross-workflow attachment rejected: attack workflow {workflow_id} != mission workflow {mission.workflow_id}"
+                )
+            workflow_id = workflow_id or mission.workflow_id
+            wf = self.get_workflow(mission.workflow_id)
+            rnd = self.get_round(round_id)
+            if wf and rnd and rnd.session_id != wf.session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: attack round belongs to session {rnd.session_id}, mission workflow to {wf.session_id}"
+                )
         if workflow_id:
             wf = self.get_workflow(workflow_id)
             if not wf:
@@ -627,9 +706,9 @@ class OperationService:
         with self._db() as db:
             db.execute(
                 """INSERT INTO attack_records(
-                    id, round_id, target_id, service, method, status, started_at, notes, evidence_id, workflow_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (attack_id, round_id, target_id, service, method, status.value, started, notes, evidence_id, workflow_id),
+                    id, round_id, target_id, service, method, status, started_at, notes, evidence_id, workflow_id, mission_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (attack_id, round_id, target_id, service, method, status.value, started, notes, evidence_id, workflow_id, mission_id),
             )
         return AttackRecord(
             id=attack_id,
@@ -642,6 +721,7 @@ class OperationService:
             notes=notes,
             evidence_id=evidence_id,
             workflow_id=workflow_id,
+            mission_id=mission_id,
         )
 
     def get_attack(self, attack_id: str) -> AttackRecord | None:
@@ -662,6 +742,7 @@ class OperationService:
             notes=row["notes"],
             evidence_id=row["evidence_id"],
             workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
+            mission_id=row["mission_id"] if "mission_id" in keys else None,
         )
 
     def update_attack_status(
@@ -691,6 +772,7 @@ class OperationService:
         round_id: int | None = None,
         target_id: str | None = None,
         workflow_id: str | None = None,
+        mission_id: str | None = None,
         limit: int = 100,
     ) -> list[AttackRecord]:
         query = "SELECT * FROM attack_records WHERE 1=1"
@@ -704,6 +786,9 @@ class OperationService:
         if workflow_id is not None:
             query += " AND workflow_id = ?"
             params.append(workflow_id)
+        if mission_id is not None:
+            query += " AND mission_id = ?"
+            params.append(mission_id)
         query += " ORDER BY started_at DESC LIMIT ?"
         params.append(limit)
 
@@ -722,6 +807,7 @@ class OperationService:
                 notes=r["notes"],
                 evidence_id=r["evidence_id"],
                 workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
+                mission_id=r["mission_id"] if "mission_id" in r.keys() else None,
             )
             for r in rows
         ]
@@ -740,8 +826,28 @@ class OperationService:
         evidence_id: str | None = None,
         workflow_id: str | None = None,
         started_at: float | None = None,
+        mission_id: str | None = None,
     ) -> DefenseRecord:
         self._validate_target(target_id)
+        if mission_id:
+            mission = self.get_mission(mission_id)
+            if not mission:
+                raise ValueError(f"Mission not found: {mission_id}")
+            if target_id != mission.target_id:
+                raise ValueError(
+                    f"Cross-target attachment rejected: defense target {target_id} != mission target {mission.target_id}"
+                )
+            if workflow_id and workflow_id != mission.workflow_id:
+                raise ValueError(
+                    f"Cross-workflow attachment rejected: defense workflow {workflow_id} != mission workflow {mission.workflow_id}"
+                )
+            workflow_id = workflow_id or mission.workflow_id
+            wf = self.get_workflow(mission.workflow_id)
+            rnd = self.get_round(round_id)
+            if wf and rnd and rnd.session_id != wf.session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: defense round belongs to session {rnd.session_id}, mission workflow to {wf.session_id}"
+                )
         if workflow_id:
             wf = self.get_workflow(workflow_id)
             if not wf:
@@ -756,9 +862,9 @@ class OperationService:
         with self._db() as db:
             db.execute(
                 """INSERT INTO defense_records(
-                    id, round_id, target_id, service, action, status, started_at, notes, evidence_id, workflow_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (defense_id, round_id, target_id, service, action, status.value, started, notes, evidence_id, workflow_id),
+                    id, round_id, target_id, service, action, status, started_at, notes, evidence_id, workflow_id, mission_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (defense_id, round_id, target_id, service, action, status.value, started, notes, evidence_id, workflow_id, mission_id),
             )
         return DefenseRecord(
             id=defense_id,
@@ -771,6 +877,7 @@ class OperationService:
             notes=notes,
             evidence_id=evidence_id,
             workflow_id=workflow_id,
+            mission_id=mission_id,
         )
 
     def get_defense(self, defense_id: str) -> DefenseRecord | None:
@@ -791,6 +898,7 @@ class OperationService:
             notes=row["notes"],
             evidence_id=row["evidence_id"],
             workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
+            mission_id=row["mission_id"] if "mission_id" in keys else None,
         )
 
     def update_defense_status(
@@ -820,6 +928,7 @@ class OperationService:
         round_id: int | None = None,
         target_id: str | None = None,
         workflow_id: str | None = None,
+        mission_id: str | None = None,
         limit: int = 100,
     ) -> list[DefenseRecord]:
         query = "SELECT * FROM defense_records WHERE 1=1"
@@ -833,6 +942,9 @@ class OperationService:
         if workflow_id is not None:
             query += " AND workflow_id = ?"
             params.append(workflow_id)
+        if mission_id is not None:
+            query += " AND mission_id = ?"
+            params.append(mission_id)
         query += " ORDER BY started_at DESC LIMIT ?"
         params.append(limit)
 
@@ -851,6 +963,7 @@ class OperationService:
                 notes=r["notes"],
                 evidence_id=r["evidence_id"],
                 workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
+                mission_id=r["mission_id"] if "mission_id" in r.keys() else None,
             )
             for r in rows
         ]
@@ -869,8 +982,28 @@ class OperationService:
         evidence_id: str | None = None,
         workflow_id: str | None = None,
         observed_at: float | None = None,
+        mission_id: str | None = None,
     ) -> FlagRecord:
         self._validate_target(target_id)
+        if mission_id:
+            mission = self.get_mission(mission_id)
+            if not mission:
+                raise ValueError(f"Mission not found: {mission_id}")
+            if target_id != mission.target_id:
+                raise ValueError(
+                    f"Cross-target attachment rejected: flag target {target_id} != mission target {mission.target_id}"
+                )
+            if workflow_id and workflow_id != mission.workflow_id:
+                raise ValueError(
+                    f"Cross-workflow attachment rejected: flag workflow {workflow_id} != mission workflow {mission.workflow_id}"
+                )
+            workflow_id = workflow_id or mission.workflow_id
+            wf = self.get_workflow(mission.workflow_id)
+            rnd = self.get_round(round_id)
+            if wf and rnd and rnd.session_id != wf.session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: flag round belongs to session {rnd.session_id}, mission workflow to {wf.session_id}"
+                )
         if workflow_id:
             wf = self.get_workflow(workflow_id)
             if not wf:
@@ -897,8 +1030,8 @@ class OperationService:
             db.execute(
                 """INSERT INTO flag_records(
                     id, round_id, target_id, source, observed_at, status,
-                    fingerprint, flag_preview, notes, evidence_id, workflow_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    fingerprint, flag_preview, notes, evidence_id, workflow_id, mission_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     flag_id,
                     round_id,
@@ -911,6 +1044,7 @@ class OperationService:
                     notes,
                     evidence_id,
                     workflow_id,
+                    mission_id,
                 ),
             )
         return FlagRecord(
@@ -925,6 +1059,7 @@ class OperationService:
             notes=notes,
             evidence_id=evidence_id,
             workflow_id=workflow_id,
+            mission_id=mission_id,
         )
 
     def get_flag(self, flag_id: str) -> FlagRecord | None:
@@ -945,6 +1080,7 @@ class OperationService:
             notes=row["notes"],
             evidence_id=row["evidence_id"],
             workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
+            mission_id=row["mission_id"] if "mission_id" in keys else None,
         )
 
     def update_flag_status(
@@ -968,6 +1104,7 @@ class OperationService:
         round_id: int | None = None,
         target_id: str | None = None,
         workflow_id: str | None = None,
+        mission_id: str | None = None,
         limit: int = 100,
     ) -> list[FlagRecord]:
         query = "SELECT * FROM flag_records WHERE 1=1"
@@ -981,6 +1118,9 @@ class OperationService:
         if workflow_id is not None:
             query += " AND workflow_id = ?"
             params.append(workflow_id)
+        if mission_id is not None:
+            query += " AND mission_id = ?"
+            params.append(mission_id)
         query += " ORDER BY observed_at DESC LIMIT ?"
         params.append(limit)
 
@@ -999,6 +1139,7 @@ class OperationService:
                 notes=r["notes"],
                 evidence_id=r["evidence_id"],
                 workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
+                mission_id=r["mission_id"] if "mission_id" in r.keys() else None,
             )
             for r in rows
         ]
@@ -1017,8 +1158,28 @@ class OperationService:
         details: dict | None = None,
         workflow_id: str | None = None,
         observed_at: float | None = None,
+        mission_id: str | None = None,
     ) -> SlaObservation:
         self._validate_target(target_id)
+        if mission_id:
+            mission = self.get_mission(mission_id)
+            if not mission:
+                raise ValueError(f"Mission not found: {mission_id}")
+            if target_id != mission.target_id:
+                raise ValueError(
+                    f"Cross-target attachment rejected: SLA target {target_id} != mission target {mission.target_id}"
+                )
+            if workflow_id and workflow_id != mission.workflow_id:
+                raise ValueError(
+                    f"Cross-workflow attachment rejected: SLA workflow {workflow_id} != mission workflow {mission.workflow_id}"
+                )
+            workflow_id = workflow_id or mission.workflow_id
+            wf = self.get_workflow(mission.workflow_id)
+            rnd = self.get_round(round_id)
+            if wf and rnd and rnd.session_id != wf.session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: SLA round belongs to session {rnd.session_id}, mission workflow to {wf.session_id}"
+                )
         if workflow_id:
             wf = self.get_workflow(workflow_id)
             if not wf:
@@ -1034,9 +1195,9 @@ class OperationService:
         with self._db() as db:
             db.execute(
                 """INSERT INTO sla_observations(
-                    id, round_id, target_id, service, observed_at, status, latency_ms, source, details, workflow_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (sla_id, round_id, target_id, service, ts, status.value, latency_ms, source, details_json, workflow_id),
+                    id, round_id, target_id, service, observed_at, status, latency_ms, source, details, workflow_id, mission_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (sla_id, round_id, target_id, service, ts, status.value, latency_ms, source, details_json, workflow_id, mission_id),
             )
         return SlaObservation(
             id=sla_id,
@@ -1049,6 +1210,7 @@ class OperationService:
             source=source,
             details=details or {},
             workflow_id=workflow_id,
+            mission_id=mission_id,
         )
 
     def get_sla(self, sla_id: str) -> SlaObservation | None:
@@ -1068,6 +1230,7 @@ class OperationService:
             source=row["source"],
             details=json.loads(row["details"]),
             workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
+            mission_id=row["mission_id"] if "mission_id" in keys else None,
         )
 
     def list_sla(
@@ -1075,6 +1238,7 @@ class OperationService:
         round_id: int | None = None,
         target_id: str | None = None,
         workflow_id: str | None = None,
+        mission_id: str | None = None,
         limit: int = 100,
     ) -> list[SlaObservation]:
         query = "SELECT * FROM sla_observations WHERE 1=1"
@@ -1088,6 +1252,9 @@ class OperationService:
         if workflow_id is not None:
             query += " AND workflow_id = ?"
             params.append(workflow_id)
+        if mission_id is not None:
+            query += " AND mission_id = ?"
+            params.append(mission_id)
         query += " ORDER BY observed_at DESC LIMIT ?"
         params.append(limit)
 
@@ -1105,6 +1272,7 @@ class OperationService:
                 source=r["source"],
                 details=json.loads(r["details"]),
                 workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
+                mission_id=r["mission_id"] if "mission_id" in r.keys() else None,
             )
             for r in rows
         ]
@@ -1332,6 +1500,315 @@ class OperationService:
             cur = db.execute("UPDATE sla_observations SET workflow_id = ? WHERE id = ?", (workflow_id, sla_id))
         return cur.rowcount > 0
 
+    # --- MISSIONS ---
+
+    def create_mission(
+        self,
+        workflow_id: str,
+        target_id: str,
+        service_port: int,
+        title: str,
+        *,
+        service_protocol: str = "tcp",
+        objective: str = "",
+        notes: str = "",
+        initial_observation_id: int | None = None,
+        mission_id: str | None = None,
+    ) -> Mission:
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow not found: {workflow_id}")
+        self._validate_target(target_id)
+        if initial_observation_id is not None and self.target_service is not None:
+            hist = self.target_service.history(target_id, limit=200)
+            if not any(o.id == initial_observation_id for o in hist):
+                raise ValueError(f"Observation {initial_observation_id} not found for target {target_id}")
+
+        mid = mission_id or str(uuid.uuid4())
+        now = time.time()
+        with self._db() as db:
+            db.execute(
+                """INSERT INTO operational_missions(
+                    mission_id, workflow_id, target_id, service_port, service_protocol,
+                    title, objective, status, created_at, notes, initial_observation_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    mid,
+                    workflow_id,
+                    target_id,
+                    service_port,
+                    service_protocol,
+                    title,
+                    objective,
+                    MissionStatus.OPEN.value,
+                    now,
+                    notes,
+                    initial_observation_id,
+                ),
+            )
+        return Mission(
+            mission_id=mid,
+            workflow_id=workflow_id,
+            target_id=target_id,
+            service_port=service_port,
+            service_protocol=service_protocol,
+            title=title,
+            objective=objective,
+            status=MissionStatus.OPEN,
+            created_at=now,
+            notes=notes,
+            initial_observation_id=initial_observation_id,
+        )
+
+    def get_mission(self, mission_id: str) -> Mission | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM operational_missions WHERE mission_id = ?", (mission_id,)).fetchone()
+        if not row:
+            return None
+        return Mission(
+            mission_id=row["mission_id"],
+            workflow_id=row["workflow_id"],
+            target_id=row["target_id"],
+            service_port=row["service_port"],
+            service_protocol=row["service_protocol"],
+            title=row["title"],
+            objective=row["objective"],
+            status=MissionStatus(row["status"]),
+            created_at=row["created_at"],
+            completed_at=row["completed_at"],
+            notes=row["notes"],
+            initial_observation_id=row["initial_observation_id"],
+        )
+
+    def list_missions(
+        self,
+        workflow_id: str | None = None,
+        target_id: str | None = None,
+        status: MissionStatus | None = None,
+        limit: int = 100,
+    ) -> list[Mission]:
+        query = "SELECT * FROM operational_missions WHERE 1=1"
+        params: list = []
+        if workflow_id:
+            query += " AND workflow_id = ?"
+            params.append(workflow_id)
+        if target_id:
+            query += " AND target_id = ?"
+            params.append(target_id)
+        if status is not None:
+            query += " AND status = ?"
+            params.append(status.value)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+
+        with self._db() as db:
+            rows = db.execute(query, params).fetchall()
+        return [
+            Mission(
+                mission_id=r["mission_id"],
+                workflow_id=r["workflow_id"],
+                target_id=r["target_id"],
+                service_port=r["service_port"],
+                service_protocol=r["service_protocol"],
+                title=r["title"],
+                objective=r["objective"],
+                status=MissionStatus(r["status"]),
+                created_at=r["created_at"],
+                completed_at=r["completed_at"],
+                notes=r["notes"],
+                initial_observation_id=r["initial_observation_id"],
+            )
+            for r in rows
+        ]
+
+    def start_mission(self, mission_id: str) -> bool:
+        m = self.get_mission(mission_id)
+        if not m:
+            raise ValueError(f"Mission not found: {mission_id}")
+        if m.status in (MissionStatus.COMPLETED, MissionStatus.ABORTED):
+            raise ValueError(f"Cannot start mission in terminal status: {m.status.value}")
+        if m.status == MissionStatus.IN_PROGRESS:
+            return True
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE operational_missions SET status = ? WHERE mission_id = ?",
+                (MissionStatus.IN_PROGRESS.value, mission_id),
+            )
+        return cur.rowcount > 0
+
+    def complete_mission(self, mission_id: str, notes: str | None = None) -> bool:
+        now = time.time()
+        m = self.get_mission(mission_id)
+        if not m:
+            raise ValueError(f"Mission not found: {mission_id}")
+        if m.status == MissionStatus.COMPLETED:
+            return True
+        if m.status == MissionStatus.ABORTED:
+            raise ValueError("Cannot complete aborted mission")
+        new_notes = notes if notes is not None else m.notes
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE operational_missions SET status = ?, completed_at = ?, notes = ? WHERE mission_id = ?",
+                (MissionStatus.COMPLETED.value, now, new_notes, mission_id),
+            )
+        return cur.rowcount > 0
+
+    def abort_mission(self, mission_id: str, notes: str | None = None) -> bool:
+        now = time.time()
+        m = self.get_mission(mission_id)
+        if not m:
+            raise ValueError(f"Mission not found: {mission_id}")
+        if m.status == MissionStatus.ABORTED:
+            return True
+        if m.status == MissionStatus.COMPLETED:
+            raise ValueError("Cannot abort completed mission")
+        new_notes = notes if notes is not None else m.notes
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE operational_missions SET status = ?, completed_at = ?, notes = ? WHERE mission_id = ?",
+                (MissionStatus.ABORTED.value, now, new_notes, mission_id),
+            )
+        return cur.rowcount > 0
+
+    def attach_action_to_mission(self, action_id: str, mission_id: str) -> bool:
+        m = self.get_mission(mission_id)
+        if not m:
+            raise ValueError(f"Mission not found: {mission_id}")
+        action = self.get_action(action_id)
+        if not action:
+            raise ValueError(f"Action not found: {action_id}")
+        if action.target_id and action.target_id != m.target_id:
+            raise ValueError(
+                f"Cross-target attachment rejected: action target {action.target_id} != mission target {m.target_id}"
+            )
+        if action.workflow_id and action.workflow_id != m.workflow_id:
+            raise ValueError(
+                f"Cross-workflow attachment rejected: action workflow {action.workflow_id} != mission workflow {m.workflow_id}"
+            )
+        wf = self.get_workflow(m.workflow_id)
+        if wf and action.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: action belongs to session {action.session_id}, mission workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE operator_actions SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?), target_id = COALESCE(target_id, ?) WHERE id = ?",
+                (mission_id, m.workflow_id, m.target_id, action_id),
+            )
+        return cur.rowcount > 0
+
+    def attach_attack_to_mission(self, attack_id: str, mission_id: str) -> bool:
+        m = self.get_mission(mission_id)
+        if not m:
+            raise ValueError(f"Mission not found: {mission_id}")
+        atk = self.get_attack(attack_id)
+        if not atk:
+            raise ValueError(f"Attack not found: {attack_id}")
+        if atk.target_id != m.target_id:
+            raise ValueError(
+                f"Cross-target attachment rejected: attack target {atk.target_id} != mission target {m.target_id}"
+            )
+        if atk.workflow_id and atk.workflow_id != m.workflow_id:
+            raise ValueError(
+                f"Cross-workflow attachment rejected: attack workflow {atk.workflow_id} != mission workflow {m.workflow_id}"
+            )
+        wf = self.get_workflow(m.workflow_id)
+        rnd = self.get_round(atk.round_id)
+        if wf and rnd and rnd.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: attack round belongs to session {rnd.session_id}, mission workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE attack_records SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?) WHERE id = ?",
+                (mission_id, m.workflow_id, attack_id),
+            )
+        return cur.rowcount > 0
+
+    def attach_defense_to_mission(self, defense_id: str, mission_id: str) -> bool:
+        m = self.get_mission(mission_id)
+        if not m:
+            raise ValueError(f"Mission not found: {mission_id}")
+        df = self.get_defense(defense_id)
+        if not df:
+            raise ValueError(f"Defense not found: {defense_id}")
+        if df.target_id != m.target_id:
+            raise ValueError(
+                f"Cross-target attachment rejected: defense target {df.target_id} != mission target {m.target_id}"
+            )
+        if df.workflow_id and df.workflow_id != m.workflow_id:
+            raise ValueError(
+                f"Cross-workflow attachment rejected: defense workflow {df.workflow_id} != mission workflow {m.workflow_id}"
+            )
+        wf = self.get_workflow(m.workflow_id)
+        rnd = self.get_round(df.round_id)
+        if wf and rnd and rnd.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: defense round belongs to session {rnd.session_id}, mission workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE defense_records SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?) WHERE id = ?",
+                (mission_id, m.workflow_id, defense_id),
+            )
+        return cur.rowcount > 0
+
+    def attach_flag_to_mission(self, flag_id: str, mission_id: str) -> bool:
+        m = self.get_mission(mission_id)
+        if not m:
+            raise ValueError(f"Mission not found: {mission_id}")
+        flg = self.get_flag(flag_id)
+        if not flg:
+            raise ValueError(f"Flag record not found: {flag_id}")
+        if flg.target_id != m.target_id:
+            raise ValueError(
+                f"Cross-target attachment rejected: flag target {flg.target_id} != mission target {m.target_id}"
+            )
+        if flg.workflow_id and flg.workflow_id != m.workflow_id:
+            raise ValueError(
+                f"Cross-workflow attachment rejected: flag workflow {flg.workflow_id} != mission workflow {m.workflow_id}"
+            )
+        wf = self.get_workflow(m.workflow_id)
+        rnd = self.get_round(flg.round_id)
+        if wf and rnd and rnd.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: flag round belongs to session {rnd.session_id}, mission workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE flag_records SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?) WHERE id = ?",
+                (mission_id, m.workflow_id, flag_id),
+            )
+        return cur.rowcount > 0
+
+    def attach_sla_to_mission(self, sla_id: str, mission_id: str) -> bool:
+        m = self.get_mission(mission_id)
+        if not m:
+            raise ValueError(f"Mission not found: {mission_id}")
+        sla = self.get_sla(sla_id)
+        if not sla:
+            raise ValueError(f"SLA observation not found: {sla_id}")
+        if sla.target_id != m.target_id:
+            raise ValueError(
+                f"Cross-target attachment rejected: SLA target {sla.target_id} != mission target {m.target_id}"
+            )
+        if sla.workflow_id and sla.workflow_id != m.workflow_id:
+            raise ValueError(
+                f"Cross-workflow attachment rejected: SLA workflow {sla.workflow_id} != mission workflow {m.workflow_id}"
+            )
+        wf = self.get_workflow(m.workflow_id)
+        rnd = self.get_round(sla.round_id)
+        if wf and rnd and rnd.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: SLA round belongs to session {rnd.session_id}, mission workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE sla_observations SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?) WHERE id = ?",
+                (mission_id, m.workflow_id, sla_id),
+            )
+        return cur.rowcount > 0
+
     # --- CHRONOLOGICAL TIMELINE ---
 
     def get_timeline(
@@ -1339,6 +1816,7 @@ class OperationService:
         round_id: int | None = None,
         target_id: str | None = None,
         workflow_id: str | None = None,
+        mission_id: str | None = None,
         limit: int = 50,
     ) -> list[TimelineEntry]:
         """Aggregate actions, attacks, defenses, flags, and SLA observations
@@ -1346,7 +1824,13 @@ class OperationService:
         """
         entries: list[TimelineEntry] = []
 
-        actions = self.list_actions(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
+        actions = self.list_actions(
+            round_id=round_id,
+            target_id=target_id,
+            workflow_id=workflow_id,
+            mission_id=mission_id,
+            limit=limit,
+        )
         for a in actions:
             entries.append(
                 TimelineEntry(
@@ -1359,10 +1843,17 @@ class OperationService:
                     status=a.status.upper(),
                     details=f"Tool: {a.tool}" if a.tool else "",
                     workflow_id=a.workflow_id,
+                    mission_id=a.mission_id,
                 )
             )
 
-        attacks = self.list_attacks(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
+        attacks = self.list_attacks(
+            round_id=round_id,
+            target_id=target_id,
+            workflow_id=workflow_id,
+            mission_id=mission_id,
+            limit=limit,
+        )
         for atk in attacks:
             entries.append(
                 TimelineEntry(
@@ -1375,10 +1866,17 @@ class OperationService:
                     status=atk.status.value.upper(),
                     details=atk.notes,
                     workflow_id=atk.workflow_id,
+                    mission_id=atk.mission_id,
                 )
             )
 
-        defenses = self.list_defenses(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
+        defenses = self.list_defenses(
+            round_id=round_id,
+            target_id=target_id,
+            workflow_id=workflow_id,
+            mission_id=mission_id,
+            limit=limit,
+        )
         for df in defenses:
             entries.append(
                 TimelineEntry(
@@ -1391,10 +1889,17 @@ class OperationService:
                     status=df.status.value.upper(),
                     details=df.notes,
                     workflow_id=df.workflow_id,
+                    mission_id=df.mission_id,
                 )
             )
 
-        flags = self.list_flags(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
+        flags = self.list_flags(
+            round_id=round_id,
+            target_id=target_id,
+            workflow_id=workflow_id,
+            mission_id=mission_id,
+            limit=limit,
+        )
         for flg in flags:
             entries.append(
                 TimelineEntry(
@@ -1407,10 +1912,17 @@ class OperationService:
                     status=flg.status.value.upper(),
                     details=flg.fingerprint,
                     workflow_id=flg.workflow_id,
+                    mission_id=flg.mission_id,
                 )
             )
 
-        sla_obs = self.list_sla(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
+        sla_obs = self.list_sla(
+            round_id=round_id,
+            target_id=target_id,
+            workflow_id=workflow_id,
+            mission_id=mission_id,
+            limit=limit,
+        )
         for s in sla_obs:
             lat_str = f"{s.latency_ms:.0f}ms" if s.latency_ms is not None else ""
             entries.append(
@@ -1424,6 +1936,7 @@ class OperationService:
                     status=s.status.value.upper(),
                     details=f"Source: {s.source}",
                     workflow_id=s.workflow_id,
+                    mission_id=s.mission_id,
                 )
             )
 
@@ -1441,5 +1954,18 @@ class OperationService:
 
         entries = self.get_timeline(workflow_id=workflow_id, limit=limit)
         # Sort ascending for workflow progression: earliest to latest
+        entries.sort(key=lambda x: (x.timestamp, x.category, x.item_id))
+        return entries
+
+    def get_mission_timeline(self, mission_id: str, limit: int = 100) -> list[TimelineEntry]:
+        """Aggregate all records associated with a mission into a chronological
+        story timeline (ascending by timestamp: earliest to latest).
+        """
+        m = self.get_mission(mission_id)
+        if not m:
+            raise ValueError(f"Mission not found: {mission_id}")
+
+        entries = self.get_timeline(mission_id=mission_id, limit=limit)
+        # Sort ascending for mission progression: earliest to latest
         entries.sort(key=lambda x: (x.timestamp, x.category, x.item_id))
         return entries

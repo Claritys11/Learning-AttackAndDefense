@@ -75,6 +75,29 @@ class WorkflowRun:
     notes: str = ""
 
 
+class MissionStatus(str, Enum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    ABORTED = "aborted"
+
+
+@dataclass(frozen=True)
+class Mission:
+    mission_id: str
+    workflow_id: str
+    target_id: str
+    service_port: int
+    service_protocol: str  # e.g. "tcp" or "udp"
+    title: str
+    objective: str = ""
+    status: MissionStatus = MissionStatus.OPEN
+    created_at: float = field(default_factory=time.time)
+    completed_at: float | None = None
+    notes: str = ""
+    initial_observation_id: int | None = None
+
+
 class ActionCategory(str, Enum):
     RECON = "recon"
     ATTACK = "attack"
@@ -101,6 +124,7 @@ class OperatorAction:
     workflow_id: str | None = None
     parent_action_id: str | None = None
     tool_execution_id: str | None = None
+    mission_id: str | None = None
 
 
 class AttackStatus(str, Enum):
@@ -124,6 +148,7 @@ class AttackRecord:
     notes: str = ""
     evidence_id: str | None = None
     workflow_id: str | None = None
+    mission_id: str | None = None
 
 
 class DefenseStatus(str, Enum):
@@ -147,6 +172,7 @@ class DefenseRecord:
     notes: str = ""
     evidence_id: str | None = None
     workflow_id: str | None = None
+    mission_id: str | None = None
 
 
 class FlagStatus(str, Enum):
@@ -171,6 +197,7 @@ class FlagRecord:
     notes: str = ""
     evidence_id: str | None = None
     workflow_id: str | None = None
+    mission_id: str | None = None
 
 
 class SlaStatus(str, Enum):
@@ -192,6 +219,7 @@ class SlaObservation:
     source: str = "local"
     details: dict[str, Any] = field(default_factory=dict)
     workflow_id: str | None = None
+    mission_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -205,6 +233,7 @@ class TimelineEntry:
     status: str
     details: str = ""
     workflow_id: str | None = None
+    mission_id: str | None = None
 
 
 def make_flag_fingerprint(raw_flag: str) -> tuple[str, str]:
