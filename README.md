@@ -5,6 +5,12 @@ GZCTF) is implemented or assumed — every place that would need one is
 marked UNKNOWN below and left as an explicit extension point instead of
 guessed.
 
+## Competition runbook
+
+Read `docs/competition-runbook.md` before competition use. It explains the exact round cadence, defensive patch/regression lane, bounded offensive wave, evidence handling, reviewed platform-adapter boundary, GZCTF telemetry, and failure handling. The built-in `submit` command remains local-only by design.
+
+Research synthesis and source captures are in `docs/gzctf-ad-workflow-analysis.md` and `docs/source-*.txt`.
+
 ## Layout
 
 ```
