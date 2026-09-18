@@ -5,7 +5,10 @@ GZCTF) is implemented or assumed — every place that would need one is
 marked UNKNOWN below and left as an explicit extension point instead of
 guessed.
 
-## Competition runbook
+## Learning roadmap
+
+The comprehensive LKS-aligned roadmap is in `docs/ad-learning-roadmap.md`. It maps the 2024/2025 topics to the GZCTF/TCP1P A&D round model, with weekly phases, lab deliverables, attack/defense gates, monitoring practice, and a final mock competition.
+
 
 Read `docs/competition-runbook.md` before competition use. It explains the exact round cadence, defensive patch/regression lane, bounded offensive wave, evidence handling, reviewed platform-adapter boundary, GZCTF telemetry, and failure handling. The built-in `submit` command remains local-only by design.
 
