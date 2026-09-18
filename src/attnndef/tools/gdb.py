@@ -41,6 +41,9 @@ class GdbAdapter:
             stderr=result.stderr,
             returncode=result.returncode,
             duration_s=result.duration_s,
+            success=result.success,
+            error_kind=result.error_kind,
+            error=result.error or (result.stderr if not result.success else None),
         )
         return result, gdb_res
 
@@ -68,5 +71,29 @@ class GdbService:
             "info registers",
             "x/16i $rip",
         ]
+        _, res = self.adapter.execute_batch(binary_path, commands, core_path=core_path, timeout_s=timeout_s)
+        return res
+
+    def inspect_registers(
+        self,
+        binary_path: str,
+        core_path: str | None = None,
+        timeout_s: float = 10.0,
+    ) -> GdbResult:
+        commands = ["info registers"]
+        _, res = self.adapter.execute_batch(binary_path, commands, core_path=core_path, timeout_s=timeout_s)
+        return res
+
+    def inspect_memory(
+        self,
+        binary_path: str,
+        address_or_symbol: str = "main",
+        core_path: str | None = None,
+        timeout_s: float = 10.0,
+    ) -> GdbResult:
+        cleaned = address_or_symbol.strip()
+        if not cleaned or not all(c.isalnum() or c in "_*+-$" for c in cleaned):
+            raise ValueError("invalid address or symbol format")
+        commands = [f"x/16gx {cleaned}"]
         _, res = self.adapter.execute_batch(binary_path, commands, core_path=core_path, timeout_s=timeout_s)
         return res

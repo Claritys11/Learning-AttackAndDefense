@@ -67,12 +67,18 @@ class HttpAdapter:
 
         res = self.runner.run(cmd, timeout_s=request.timeout_s + 2.0)
         status_code, headers, body = parse_http_raw(res.stdout)
+        success = res.success or (status_code > 0 and res.error_kind == "nonzero_exit")
+        error_kind = "success" if success else res.error_kind
         http_response = HttpResponse(
             status_code=status_code,
             headers=headers,
             body=body,
             duration_s=res.duration_s,
             raw_output=res.stdout,
+            success=success,
+            error_kind=error_kind,
+            error=res.error or (res.stderr if not success else None),
+            returncode=res.returncode,
         )
         return res, http_response
 

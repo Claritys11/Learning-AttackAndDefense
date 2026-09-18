@@ -97,17 +97,29 @@ class NmapAdapter:
 class NmapService:
     adapter: NmapAdapter
 
+    def discover_detailed(self, network: str, *, timeout_s: float = 30.0) -> tuple[ToolResult, tuple[DiscoveredHost, ...]]:
+        return self.adapter.discover_hosts(network, timeout_s=timeout_s)
+
     def discover(self, network: str, *, timeout_s: float = 30.0) -> tuple[DiscoveredHost, ...]:
-        result, hosts = self.adapter.discover_hosts(network, timeout_s=timeout_s)
+        result, hosts = self.discover_detailed(network, timeout_s=timeout_s)
         if not result.success:
             raise RuntimeError(f"Nmap host discovery failed: {result.stderr or result.error or 'unknown error'}")
         return hosts
 
-    def scan_target(self, host: str, *, ports: str = "1-1024", service_detection: bool = False, timeout_s: float = 30.0) -> tuple[Service, ...]:
+    def scan_target_detailed(
+        self,
+        host: str,
+        *,
+        ports: str = "1-1024",
+        service_detection: bool = False,
+        timeout_s: float = 30.0,
+    ) -> tuple[ToolResult, tuple[Service, ...]]:
         if service_detection:
-            result, services = self.adapter.scan_services(host, ports=ports, timeout_s=timeout_s)
-        else:
-            result, services = self.adapter.scan_ports(host, ports=ports, timeout_s=timeout_s)
+            return self.adapter.scan_services(host, ports=ports, timeout_s=timeout_s)
+        return self.adapter.scan_ports(host, ports=ports, timeout_s=timeout_s)
+
+    def scan_target(self, host: str, *, ports: str = "1-1024", service_detection: bool = False, timeout_s: float = 30.0) -> tuple[Service, ...]:
+        result, services = self.scan_target_detailed(host, ports=ports, service_detection=service_detection, timeout_s=timeout_s)
         if not result.success:
             raise RuntimeError(f"Nmap port scan failed: {result.stderr or result.error or 'unknown error'}")
         return services

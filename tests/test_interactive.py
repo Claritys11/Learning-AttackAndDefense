@@ -65,17 +65,18 @@ def test_tools_menu_navigation():
         targets = TargetService(f"{d}/state.db")
         targets.add_target(Target("web", "web", "127.0.0.1", Role.ENEMY))
 
-        # Test: Main menu (2: Tools) -> HTTP (2) -> default inputs -> Back (0) -> Exit (0)
-        answers = iter(["2", "2", "", "", "0", "0"])
+        # Test: Main menu (2: Tools) -> HTTP (2) -> GET (1) -> defaults -> confirm "y" -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["2", "2", "1", "", "", "", "y", "0", "0", "0"])
         output = []
         console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=MockRunner())
         console.run()
         text = "\n".join(output)
-        assert "OPERATOR TOOLS" in text
-        assert "HTTP 200" in text
+        assert "Tools" in text
+        assert "HTTP GET completed" in text
+        assert "Status:   200" in text
 
-        # Test: Main menu (2: Tools) -> System Diagnostics (7) -> ss listening (1) -> Back (0) -> Exit (0)
-        answers = iter(["2", "7", "1", "0", "0"])
+        # Test: Main menu (2: Tools) -> System Diagnostics (7) -> ss listening (1) -> confirm "y" -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["2", "7", "1", "y", "0", "0", "0"])
         output = []
         console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=MockRunner())
         console.run()
@@ -119,3 +120,116 @@ def test_competition_menu_and_round_advance():
         assert "jjz.jatimprov.go.id" in text
         assert "Active round set to 3." in text
         assert console.context.current_round == 3
+
+def test_parameter_review_cancel_does_not_execute():
+    with tempfile.TemporaryDirectory() as d:
+        class TrackingRunner:
+            def __init__(self):
+                self.calls = []
+            def run(self, cmd, timeout_s=10.0, cwd=None, input=None):
+                self.calls.append(cmd)
+                return ToolResult(tuple(cmd), 0, "", "", 1.0, 1.1)
+
+        runner = TrackingRunner()
+        store = ContextStore(f"{d}/state.db")
+        store.save(OperatorContext(operator_name="Kai", selected_target="web"))
+        targets = TargetService(f"{d}/state.db")
+        targets.add_target(Target("web", "web", "127.0.0.1", Role.ENEMY))
+
+        # Main menu (2: Tools) -> Nmap (1) -> Port Scan (2) -> host ("") -> ports ("80") -> Execute? "N" -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["2", "1", "2", "", "80", "N", "0", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=runner)
+        console.run()
+        text = "\n".join(output)
+        assert "Operation cancelled." in text
+        assert len(runner.calls) == 0
+
+def test_scope_check_rejection_in_interactive_console():
+    with tempfile.TemporaryDirectory() as d:
+        class TrackingRunner:
+            def __init__(self): self.calls = []
+            def run(self, cmd, timeout_s=10.0, cwd=None, input=None):
+                self.calls.append(cmd)
+                return ToolResult(tuple(cmd), 0, "", "", 1.0, 1.1)
+
+        runner = TrackingRunner()
+        store = ContextStore(f"{d}/state.db")
+        store.save(OperatorContext(operator_name="Kai", selected_target="bad_box"))
+        targets = TargetService(f"{d}/state.db")
+        targets.add_target(Target("bad_box", "bad_box", "192.168.1.100", Role.ENEMY))
+        scope = Scope(frozenset({Role.ENEMY}), ("10.0.0.0/8",), excluded_targets=frozenset({"bad_box"}))
+
+        # Main menu (2: Tools) -> Nmap (1) -> Port Scan (2) -> host ("") -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["2", "1", "2", "", "0", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=runner, scope=scope)
+        console.run()
+        text = "\n".join(output)
+        assert "Scope check rejected" in text
+        assert len(runner.calls) == 0
+
+def test_operator_workflow_with_evidence_saving():
+    import sys
+    from attnndef.io.sink import LocalSink
+    with tempfile.TemporaryDirectory() as d:
+        sink = LocalSink(f"{d}/evidence.jsonl")
+        xml_ports = """<nmaprun><host><ports><port protocol="tcp" portid="80"><state state="open"/><service name="http" product="nginx"/></port></ports></host></nmaprun>"""
+        class MockRunner:
+            def run(self, cmd, timeout_s=10.0, cwd=None, input=None):
+                return ToolResult(tuple(cmd), 0, xml_ports, "", 1.0, 1.25, error_kind="success")
+
+        store = ContextStore(f"{d}/state.db")
+        store.save(OperatorContext(operator_name="Kai", selected_target="web"))
+        targets = TargetService(f"{d}/state.db")
+        targets.add_target(Target("web", "web", "127.0.0.1", Role.ENEMY))
+
+        # Main menu (2: Tools) -> Nmap (1) -> Port Scan (2) -> host ("") -> ports ("80") -> Execute? "y" -> Save evidence? "y" -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["2", "1", "2", "", "80", "y", "y", "0", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=MockRunner(), sink=sink)
+        console.run()
+        text = "\n".join(output)
+        assert "✓ Nmap completed" in text
+        assert "80/tcp" in text
+        assert "✓ Evidence recorded" in text
+
+        entries = sink.read_all()
+        assert len(entries) == 1
+        assert entries[0]["kind"] == "tool_nmap"
+        assert entries[0]["ok"] is True
+        assert entries[0]["payload"]["operation"] == "port_scan"
+
+def test_ssh_and_gdb_operator_workflows():
+    import sys
+    with tempfile.TemporaryDirectory() as d:
+        class MultiRunner:
+            def run(self, cmd, timeout_s=10.0, cwd=None, input=None):
+                if cmd[0] == "ssh":
+                    return ToolResult(tuple(cmd), 0, "active (running)", "", 1.0, 1.2, error_kind="success")
+                elif cmd[0] == "gdb":
+                    return ToolResult(tuple(cmd), 0, "Reading symbols from binary...", "", 1.0, 1.3, error_kind="success")
+                return ToolResult(tuple(cmd), 0, "", "", 1.0, 1.1)
+
+        store = ContextStore(f"{d}/state.db")
+        store.save(OperatorContext(operator_name="Kai", selected_target="box"))
+        targets = TargetService(f"{d}/state.db")
+        targets.add_target(Target("box", "box", "127.0.0.1", Role.OWN))
+
+        # Test SSH: (2: Tools) -> SSH (4) -> Diagnostic (1) -> Service Status (1) -> svc ("nginx") -> host ("") -> port ("") -> user ("") -> key ("") -> timeout ("") -> Execute? "y" -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["2", "4", "1", "1", "nginx", "", "", "", "", "", "y", "0", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=MultiRunner())
+        console.run()
+        text = "\n".join(output)
+        assert "✓ SSH completed" in text
+        assert "active (running)" in text
+
+        # Test GDB: (2: Tools) -> GDB (6) -> Binary Inspection (1) -> sys.executable -> Execute? "y" -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["2", "6", "1", sys.executable, "y", "0", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=MultiRunner())
+        console.run()
+        text = "\n".join(output)
+        assert "✓ GDB completed" in text
+        assert "Reading symbols" in text

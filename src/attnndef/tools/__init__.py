@@ -13,6 +13,7 @@ from .models import (
     PacketCaptureResult,
     SshExecutionResult,
     SystemToolResult,
+    ToolExecutionRecord,
 )
 from .nmap import DiscoveredHost, NmapAdapter, NmapService, parse_discovery_xml, parse_nmap_xml, validate_ports
 from .ssh import SshAdapter, SshService
@@ -50,4 +51,5 @@ __all__ = [
     "SystemAdapter",
     "SystemService",
     "SystemToolResult",
+    "ToolExecutionRecord",
 ]

@@ -247,3 +247,84 @@ def test_system_adapter_and_service():
 
     res_wg = svc.wireguard_status("wg0")
     assert runner.last_command == ("wg", "show", "wg0")
+
+def test_tool_execution_record_and_evidence():
+    from attnndef.tools import ToolExecutionRecord
+    rec = ToolExecutionRecord(
+        tool="nmap",
+        operation="port_scan",
+        target="10.0.0.5",
+        timestamp=1000.0,
+        duration_s=1.25,
+        parameters={"ports": "80,443"},
+        success=True,
+        returncode=0,
+        output_summary="2 open ports",
+    )
+    assert rec.success
+    assert rec.duration_s == 1.25
+
+    ev = rec.to_evidence()
+    assert ev.kind == "tool_nmap"
+    assert ev.target_id == "10.0.0.5"
+    assert ev.ok is True
+    assert ev.payload["summary"] == "2 open ports"
+    assert ev.payload["parameters"]["ports"] == "80,443"
+
+def test_gdb_registers_and_memory():
+    runner = FakeToolRunner(stdout="rax 0x0\nrbx 0x1\n")
+    adapter = GdbAdapter(runner)
+    svc = GdbService(adapter)
+
+    res_reg = svc.inspect_registers(sys.executable)
+    assert "info registers" in runner.last_command
+    assert res_reg.success
+
+    res_mem = svc.inspect_memory(sys.executable, address_or_symbol="main")
+    assert "x/16gx main" in runner.last_command
+    assert res_mem.success
+
+    with pytest.raises(ValueError, match="invalid address or symbol format"):
+        svc.inspect_memory(sys.executable, address_or_symbol="main; rm -rf /")
+
+def test_nmap_detailed_methods():
+    xml_ports = """<nmaprun><host><ports><port protocol="tcp" portid="80"><state state="open"/><service name="http" product="nginx"/></port></ports></host></nmaprun>"""
+    runner = FakeToolRunner(stdout=xml_ports)
+    adapter = NmapAdapter(runner)
+    svc = NmapService(adapter)
+
+    res, services = svc.scan_target_detailed("10.0.0.5", ports="80")
+    assert res.success
+    assert len(services) == 1
+    assert services[0].port == 80
+
+def test_tool_parameter_validation_and_failures():
+    with pytest.raises(ValueError, match="ports must use values"):
+        validate_ports("0")
+    with pytest.raises(ValueError, match="ports must use values"):
+        validate_ports("70000")
+    with pytest.raises(ValueError, match="valid ranges"):
+        validate_ports("100-50")
+
+    runner = FakeToolRunner(returncode=1, timed_out=True, error_kind="timeout")
+    svc_nmap = NmapService(NmapAdapter(runner))
+    with pytest.raises(RuntimeError, match="failed"):
+        svc_nmap.discover("10.0.0.0/24")
+    with pytest.raises(RuntimeError, match="failed"):
+        svc_nmap.scan_target("10.0.0.5", ports="80")
+
+    adapter_tcp = TcpdumpAdapter(runner)
+    with pytest.raises(ValueError, match="between 1 and 300"):
+        adapter_tcp.capture(duration_s=350)
+    with pytest.raises(ValueError, match="between 1 and 10000"):
+        adapter_tcp.capture(packet_count=20000)
+
+    adapter_ssh = SshAdapter(runner)
+    with pytest.raises(ValueError, match="invalid SSH port"):
+        adapter_ssh.execute_command("10.0.0.1", "uptime", port=70000)
+
+    svc_sys = SystemService(SystemAdapter(runner))
+    with pytest.raises(ValueError, match="service name"):
+        svc_sys.systemctl_status("   ")
+    with pytest.raises(ValueError, match="domain"):
+        svc_sys.dig_lookup("   ")

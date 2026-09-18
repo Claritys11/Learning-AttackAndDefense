@@ -19,6 +19,9 @@ class SystemAdapter:
             stderr=result.stderr,
             returncode=result.returncode,
             duration_s=result.duration_s,
+            success=result.success,
+            error_kind=result.error_kind,
+            error=result.error or (result.stderr if not result.success else None),
         )
         return result, sys_res
 

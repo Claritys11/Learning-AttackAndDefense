@@ -35,6 +35,9 @@ class TcpdumpAdapter:
 
         # ToolRunner timeout terminates the process group if packet_count hasn't triggered yet
         result = self.runner.run(cmd, timeout_s=duration_s)
+        # Bounded captures intentionally terminate when duration expires
+        success = result.success or (result.timed_out and result.error_kind == "timeout")
+        error_kind = "success" if success else result.error_kind
         cap_result = PacketCaptureResult(
             interface=interface,
             packet_count=packet_count,
@@ -42,6 +45,10 @@ class TcpdumpAdapter:
             raw_output=result.stdout + ("\n" + result.stderr if result.stderr else ""),
             duration_s=result.duration_s,
             pcap_path=output_pcap,
+            success=success,
+            error_kind=error_kind,
+            error=result.error or (result.stderr if not success else None),
+            returncode=result.returncode,
         )
         return result, cap_result
 

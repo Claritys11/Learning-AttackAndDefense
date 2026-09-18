@@ -54,6 +54,9 @@ class SshAdapter:
             stderr=result.stderr,
             duration_s=result.duration_s,
             timed_out=result.timed_out,
+            success=result.success,
+            error_kind=result.error_kind,
+            error=result.error or (result.stderr if not result.success else None),
         )
         return result, ssh_res
 

@@ -26,6 +26,7 @@ from .context import ContextStore
 from .defense.health import HealthChecker
 from .defense.patcher import TextReplacePatch
 from .defense.replay import ExploitReplay
+from .integrations.tool_runner import ToolRunner
 from .io.logging_setup import setup_logging
 from .io.sink import LocalSink
 
@@ -91,6 +92,62 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--target-id", required=True)
     rb.add_argument("--backup-path", required=True)
     rb.add_argument("--config-path", required=True)
+
+    # Tool Subcommands (Direct CLI parity)
+    pn = sub.add_parser("nmap", help="run scoped nmap scan or discovery")
+    pn.add_argument("--host", help="target host or IP")
+    pn.add_argument("--ports", default="1-1024", help="ports range or list")
+    pn.add_argument("--service-detection", action="store_true", help="enable -sV -sC")
+    pn.add_argument("--discover", help="network CIDR for host discovery (-sn)")
+    pn.add_argument("--timeout", type=float, default=30.0)
+    pn.add_argument("--json", action="store_true")
+
+    phttp = sub.add_parser("http", help="perform typed HTTP inspection request")
+    phttp.add_argument("--url", required=True, help="target URL")
+    phttp.add_argument("--method", default="GET", choices=["GET", "POST", "HEAD", "PUT", "DELETE"])
+    phttp.add_argument("--header", action="append", default=[], help="custom header (Key: Value)")
+    phttp.add_argument("--body", default=None, help="request body")
+    phttp.add_argument("--timeout", type=float, default=10.0)
+    phttp.add_argument("--json", action="store_true")
+
+    pf = sub.add_parser("ffuf", help="run bounded endpoint fuzzing")
+    pf.add_argument("--url", required=True, help="URL with FUZZ keyword")
+    pf.add_argument("--wordlist", required=True, help="wordlist file path")
+    pf.add_argument("--extension", action="append", default=[], help="extensions to append")
+    pf.add_argument("--timeout", type=float, default=30.0)
+    pf.add_argument("--json", action="store_true")
+
+    pssh = sub.add_parser("ssh", help="run bounded non-interactive diagnostic command over SSH")
+    pssh.add_argument("--host", required=True, help="SSH target host")
+    pssh.add_argument("--command", "--cmd", dest="remote_command", required=True, help="remote diagnostic command")
+    pssh.add_argument("--port", type=int, default=22)
+    pssh.add_argument("--user", default="root")
+    pssh.add_argument("--key", default=None, help="identity key file")
+    pssh.add_argument("--timeout", type=float, default=15.0)
+    pssh.add_argument("--json", action="store_true")
+
+    ptcp = sub.add_parser("tcpdump", help="run bounded packet capture")
+    ptcp.add_argument("--interface", default="any")
+    ptcp.add_argument("--duration", type=float, default=5.0)
+    ptcp.add_argument("--count", type=int, default=50)
+    ptcp.add_argument("--filter", default="", help="BPF filter")
+    ptcp.add_argument("--pcap", default=None, help="output pcap path")
+    ptcp.add_argument("--json", action="store_true")
+
+    pgdb = sub.add_parser("gdb", help="run batch non-interactive binary inspection with GDB")
+    pgdb.add_argument("--binary", required=True, help="target binary path")
+    pgdb.add_argument("--op", choices=["inspect", "crash", "registers", "memory"], default="inspect")
+    pgdb.add_argument("--core", default=None, help="core dump path")
+    pgdb.add_argument("--sym", default="main", help="symbol or address for memory inspection")
+    pgdb.add_argument("--timeout", type=float, default=15.0)
+    pgdb.add_argument("--json", action="store_true")
+
+    psys = sub.add_parser("sys", help="run typed Linux system diagnostics")
+    psys.add_argument("--op", choices=["ss-listen", "ss-all", "ps", "service", "ip-addr", "ip-route", "dig", "wg"], required=True)
+    psys.add_argument("--name", default="", help="service name for service op")
+    psys.add_argument("--domain", default="jjz.jatimprov.go.id", help="domain for dig op")
+    psys.add_argument("--interface", default=None, help="interface for wg op")
+    psys.add_argument("--json", action="store_true")
 
     return p
 
@@ -222,6 +279,127 @@ def main(argv=None) -> int:
             )
         )
         return 0
+
+    if args.command == "nmap":
+        from .tools import NmapAdapter, NmapService
+        runner = ToolRunner()
+        svc = NmapService(NmapAdapter(runner))
+        if args.discover:
+            hosts = svc.discover(args.discover, timeout_s=args.timeout)
+            if getattr(args, "json", False):
+                print(json.dumps([h.__dict__ for h in hosts], default=str, indent=2))
+            else:
+                for h in hosts:
+                    print(f"{h.host}\t{h.status}")
+        elif args.host:
+            services = svc.scan_target(args.host, ports=args.ports, service_detection=args.service_detection, timeout_s=args.timeout)
+            if getattr(args, "json", False):
+                print(json.dumps([s.__dict__ for s in services], default=str, indent=2))
+            else:
+                for s in services:
+                    print(f"{s.port}/{s.protocol}\t{s.name}\t{s.version}".rstrip())
+        else:
+            raise SystemExit("nmap requires either --host or --discover")
+        return 0
+
+    if args.command == "http":
+        from .tools import HttpAdapter, HttpService
+        runner = ToolRunner()
+        svc = HttpService(HttpAdapter(runner))
+        hdrs = {}
+        for h in (args.header or []):
+            if ":" in h:
+                k, v = h.split(":", 1)
+                hdrs[k.strip()] = v.strip()
+        resp = svc.request(args.url, method=args.method, headers=hdrs, body=args.body, timeout_s=args.timeout)
+        if getattr(args, "json", False):
+            print(json.dumps(resp.__dict__, default=str, indent=2))
+        else:
+            print(f"HTTP {resp.status_code} ({resp.duration_s:.3f}s)")
+            print(resp.body)
+        return 0 if resp.status_code > 0 else 1
+
+    if args.command == "ffuf":
+        from .tools import FfufAdapter, FfufService
+        runner = ToolRunner()
+        svc = FfufService(FfufAdapter(runner))
+        res = svc.discover_endpoints(args.url, args.wordlist, extensions=args.extension, timeout_s=args.timeout)
+        if getattr(args, "json", False):
+            print(json.dumps({"matches": [m.__dict__ for m in res.matches], "duration_s": res.duration_s}, default=str, indent=2))
+        else:
+            for m in res.matches:
+                print(f"[{m.status}]\tlen={m.length}\t{m.url}")
+        return 0
+
+    if args.command == "ssh":
+        from .tools import SshAdapter, SshService
+        runner = ToolRunner()
+        svc = SshService(SshAdapter(runner))
+        res = svc.run(args.host, args.remote_command, port=args.port, username=args.user, identity_file=args.key, timeout_s=args.timeout)
+        if getattr(args, "json", False):
+            print(json.dumps(res.__dict__, default=str, indent=2))
+        else:
+            sys.stdout.write(res.stdout)
+            if res.stderr:
+                sys.stderr.write(res.stderr)
+        return res.returncode or 0
+
+    if args.command == "tcpdump":
+        from .tools import TcpdumpAdapter, TcpdumpService
+        runner = ToolRunner()
+        svc = TcpdumpService(TcpdumpAdapter(runner))
+        res = svc.capture_live(interface=args.interface, duration_s=args.duration, packet_count=args.count, bpf_filter=args.filter, output_pcap=args.pcap)
+        if getattr(args, "json", False):
+            print(json.dumps(res.__dict__, default=str, indent=2))
+        else:
+            print(res.raw_output)
+        return 0
+
+    if args.command == "gdb":
+        from .tools import GdbAdapter, GdbService
+        runner = ToolRunner()
+        svc = GdbService(GdbAdapter(runner))
+        if args.op == "inspect":
+            res = svc.inspect_binary(args.binary, timeout_s=args.timeout)
+        elif args.op == "crash":
+            res = svc.analyze_crash(args.binary, core_path=args.core, timeout_s=args.timeout)
+        elif args.op == "registers":
+            res = svc.inspect_registers(args.binary, core_path=args.core, timeout_s=args.timeout)
+        else:
+            res = svc.inspect_memory(args.binary, address_or_symbol=args.sym, core_path=args.core, timeout_s=args.timeout)
+        if getattr(args, "json", False):
+            print(json.dumps(res.__dict__, default=str, indent=2))
+        else:
+            print(res.stdout)
+        return res.returncode or 0
+
+    if args.command == "sys":
+        from .tools import SystemAdapter, SystemService
+        runner = ToolRunner()
+        svc = SystemService(SystemAdapter(runner))
+        if args.op == "ss-listen":
+            res = svc.ss_listening()
+        elif args.op == "ss-all":
+            res = svc.ss_all()
+        elif args.op == "ps":
+            res = svc.ps_aux()
+        elif args.op == "service":
+            if not args.name:
+                raise SystemExit("sys --op service requires --name <service>")
+            res = svc.systemctl_status(args.name)
+        elif args.op == "ip-addr":
+            res = svc.ip_addr()
+        elif args.op == "ip-route":
+            res = svc.ip_route()
+        elif args.op == "dig":
+            res = svc.dig_lookup(args.domain)
+        elif args.op == "wg":
+            res = svc.wireguard_status(args.interface)
+        if getattr(args, "json", False):
+            print(json.dumps(res.__dict__, default=str, indent=2))
+        else:
+            print(res.stdout)
+        return res.returncode or 0
 
     return 1
 

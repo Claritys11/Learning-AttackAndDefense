@@ -133,4 +133,8 @@ class FfufService:
             matches=matches,
             duration_s=result.duration_s,
             raw_output=result.stdout,
+            success=result.success,
+            error_kind=result.error_kind,
+            error=result.error or (result.stderr if not result.success else None),
+            returncode=result.returncode,
         )
