@@ -21,11 +21,13 @@ This is an educational project, not a production security platform. Use only aga
 
 ## Start here
 
-1. Read `docs/ad-learning-roadmap.md` for the 12-week learning path.
-2. Read `docs/competition-runbook.md` for the competition-time operating flow.
-3. Read `docs/gzctf-ad-workflow-analysis.md` for the GZCTF/TCP1P model.
-4. Run the local test suite.
-5. Build one lab module using the six-step cycle: concept → observe → reproduce → attack → defend → verify.
+1. Read `docs/quickstart.md` for the shortest working setup.
+2. Read `docs/tools-guide.md` for the command map and function contracts.
+3. Read `docs/ad-learning-roadmap.md` for the 12-week learning path.
+4. Read `docs/competition-runbook.md` for the competition-time operating flow.
+5. Read `docs/gzctf-ad-workflow-analysis.md` for the GZCTF/TCP1P model.
+6. Run the local test suite.
+7. Build one lab module using the six-step cycle: concept → observe → reproduce → attack → defend → verify.
 
 ```bash
 git clone <repository-url>
@@ -136,6 +138,8 @@ The endpoint must be explicitly verified from the official event/API. Without `-
 
 ## Documentation index
 
+- `docs/quickstart.md` — get started and run the tools.
+- `docs/tools-guide.md` — command map, contracts, and safety gates.
 - `docs/ad-learning-roadmap.md` — LKS 2024/2025-aligned learning plan.
 - `docs/competition-runbook.md` — round-by-round operator guide.
 - `docs/gzctf-ad-workflow-analysis.md` — platform and A&D flow synthesis.
