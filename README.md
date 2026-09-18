@@ -24,7 +24,8 @@ src/attnndef/
   defense/  health.py (HealthChecker), patcher.py (PatchStrategy: dry-run/
             apply/rollback, TextReplacePatch concrete example),
             replay.py (ExploitReplay: post-patch regression gate)
-  cli.py    discover / solve / extract / submit / patch / health / replay / rollback
+  `wave` — orchestrate multiple approved solvers, then optionally submit via an
+              explicit HTTPS/localhost adapter (dry-run by default).
 tests/      17 tests incl. a self-contained mock fixture service (tests/fixtures/mock_service.py)
 config/     targets.example.json — copy to config/targets.json and edit
 ```
