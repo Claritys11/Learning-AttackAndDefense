@@ -2,12 +2,11 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
 artifacts/
+evidence/
 .claude-import/
 Attndef.zip
-refs/*
-.coverage
+config/targets.json
 .env
-refs/*/.venv/
-refs/*/lib64/
-refs/*/pyvenv.cfg
+refs/

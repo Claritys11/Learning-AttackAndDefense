@@ -1,113 +1,153 @@
-# attnndef — local fixture Attack/Defense scaffolding
+# Learning A&D
 
-Scope: **localhost fixtures/mocks only**. No platform integration (e.g.
-GZCTF) is implemented or assumed — every place that would need one is
-marked UNKNOWN below and left as an explicit extension point instead of
-guessed.
+A community-oriented, local-first Attack & Defense learning repository for LKS-style practice and GZCTF/TCP1P-compatible competition workflows.
 
-## Learning roadmap
+> Learn the vulnerability, attack the lab, patch the root cause, preserve the SLA, and prove the fix.
 
-The comprehensive LKS-aligned roadmap is in `docs/ad-learning-roadmap.md`. It maps the 2024/2025 topics to the GZCTF/TCP1P A&D round model, with weekly phases, lab deliverables, attack/defense gates, monitoring practice, and a final mock competition.
+## What this project teaches
 
+- Enumeration and service/asset mapping.
+- CVE reproduction and mitigation.
+- Linux and Windows administration/security.
+- SSH, VPN, OAuth2/OIDC, and Active Directory fundamentals.
+- Source-code review and vulnerability modeling.
+- Privilege escalation in isolated labs.
+- Event, process, authentication, and network monitoring.
+- Data-exfiltration modeling and egress control.
+- Firewall, account, password, and scheduler policy.
+- A&D round operations: own-service defense, opponent-service attack, SLA, scoring, evidence, and rollback.
 
-Read `docs/competition-runbook.md` before competition use. It explains the exact round cadence, defensive patch/regression lane, bounded offensive wave, evidence handling, reviewed platform-adapter boundary, GZCTF telemetry, and failure handling. The built-in `submit` command remains local-only by design.
+This is an educational project, not a production security platform. Use only against fixtures, VMs, containers, or competition targets where you have explicit authorization.
 
-Research synthesis and source captures are in `docs/gzctf-ad-workflow-analysis.md` and `docs/source-*.txt`.
+## Start here
 
-## Layout
+1. Read `docs/ad-learning-roadmap.md` for the 12-week learning path.
+2. Read `docs/competition-runbook.md` for the competition-time operating flow.
+3. Read `docs/gzctf-ad-workflow-analysis.md` for the GZCTF/TCP1P model.
+4. Run the local test suite.
+5. Build one lab module using the six-step cycle: concept → observe → reproduce → attack → defend → verify.
 
-```
-src/attnndef/
-  core/     models.py (Target, ExploitResult, Evidence, PatchPlan, HealthResult),
-            registry.py (TargetRegistry, loads config/targets.json), errors.py
-  io/       sink.py (LocalSink: append-only JSONL evidence),
-            logging_setup.py (structured JSON operational logs)
-  attack/   extractor.py (RegexExtractor + FlagValidator),
-            runner.py (AttackRunner: bounded concurrency + per-target timeout)
-  defense/  health.py (HealthChecker), patcher.py (PatchStrategy: dry-run/
-            apply/rollback, TextReplacePatch concrete example),
-            replay.py (ExploitReplay: post-patch regression gate)
-  `wave` — orchestrate multiple approved solvers, then optionally submit via an
-              explicit HTTPS/localhost adapter (dry-run by default).
-tests/      17 tests incl. a self-contained mock fixture service (tests/fixtures/mock_service.py)
-config/     targets.example.json — copy to config/targets.json and edit
-```
-
-## Run tests
-
-```
-pip install pytest --break-system-packages   # or use a venv
-python -m pytest -q
+```bash
+git clone <repository-url>
+cd attNdef
+python -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install pytest
+.venv/bin/pytest -q
 ```
 
-## CLI quick reference
+Expected current baseline: all repository tests pass.
 
+## Repository map
+
+```text
+src/attnndef/       reusable attack/defense orchestration library
+  core/             typed targets, results, evidence, patch plans
+  attack/           extractor, bounded runner, multi-solver wave, submit adapter
+  defense/          health, patch, rollback, exploit replay
+  io/               structured logs and append-only local evidence
+  cli.py            discover, solve, wave, extract, submit, patch, health, replay
+config/             safe example target registry; real registry stays untracked
+docs/               roadmap, runbooks, GZCTF research, source captures
+labs/               space for community/local learning modules
+tests/              unit, fixture, contract, and orchestration tests
 ```
-attnndef discover --role enemy
-attnndef solve --attack-fn mypkg.exploits.web01:attack_fn --role enemy
-attnndef extract --input raw.txt --target-id svc-enemy-01
-attnndef submit --target-id svc-enemy-01 --flag "FLAG{...}"     # local record only, see UNKNOWN
-attnndef patch --target-id svc-own-01 --search DEBUG=true --replace DEBUG=false --mode dry-run
-attnndef patch --target-id svc-own-01 --search DEBUG=true --replace DEBUG=false --mode apply
-attnndef health --check-fn mypkg.checks:tcp_check --role own
-attnndef replay --target-id svc-own-01 --attack-fn mypkg.exploits.web01:attack_fn --check-fn mypkg.checks:tcp_check
-attnndef rollback --target-id svc-own-01 --backup-path backups/svc-own-01-....bak --config-path fixtures/own-web/service.ini
+
+## Learning workflow
+
+For every topic, create a small isolated lab:
+
+```text
+labs/<topic>/
+  README.md             learning objective and threat model
+  vulnerable/           intentionally vulnerable fixture
+  patched/              expected fixed version
+  attack.py             bounded PoC against the fixture only
+  defense.md            root cause and mitigation
+  tests/                exploit, regression, and SLA tests
+  evidence/             ignored local observations
 ```
 
-`--attack-fn` / `--check-fn` are dotted `module:function` imports you
-provide per challenge — this scaffolding deliberately does not contain
-any exploit logic.
+A module is complete only when:
 
-## Implementation order (already built in this order; use it if extending)
+- the vulnerable behavior is reproducible;
+- the attack has a clear precondition and observable impact;
+- the root cause is explained;
+- the patch is minimal and idempotent;
+- legitimate functionality still passes;
+- exploit replay fails after patching;
+- rollback works;
+- secrets are not committed.
 
-1. `core/models.py`, `core/errors.py` — no dependencies, defines the shared vocabulary.
-2. `core/registry.py` — depends only on models; easiest to unit test (pure JSON parsing).
-3. `io/sink.py`, `io/logging_setup.py` — infra used by everything downstream.
-4. `attack/extractor.py` — pure functions, no I/O, cheapest to get right first.
-5. `attack/runner.py` — concurrency + timeout; test with fake `attack_fn`s before touching real sockets.
-6. `defense/health.py` — same timeout pattern as the runner, smaller surface.
-7. `defense/patcher.py` — file I/O with backup/rollback; test on tmp_path fixtures only.
-8. `defense/replay.py` — composes runner + health, no new mechanism.
-9. `cli.py` — wires everything; test manually against `config/targets.example.json` + the mock fixture.
-10. `tests/fixtures/mock_service.py` + full test suite — validates the whole pipeline end-to-end locally.
+## A&D competition model
 
-Suggested next steps once you're ready to point this at a real environment:
-11. Add a concrete `attack_fn`/`check_fn` per challenge in your own module (outside this package).
-12. Only then design a platform adapter (submission, discovery) — see UNKNOWN below — as a *separate* module so it can be swapped/mocked in tests.
+```text
+event/challenge manifest
+        -> review/import/build
+        -> service instance per team
+        -> warmup
+        -> repeated round/tick
+             |-- own lane: inspect -> patch -> health/SLA -> replay
+             |-- attack lane: refresh targets -> solver wave -> extract -> submit
+             |-- telemetry: live feed, process, traffic, honeypot, access
+             |-- forensics: evidence, change manifest, snapshots
+        -> scoring and human review
+```
 
-## UNKNOWN / explicitly not implemented (do not assume these)
+The defender owns its instances. The attacker targets only opponent instances listed by the authorized competition mechanism. The checker exercises the normal service flow, so a patch that simply disables the service is a failed defense.
 
-- **Any GZCTF (or other platform) HTTP API** — team/service discovery, flag
-  submission endpoint & schema, auth/session handling. `discover` only
-  reads a local JSON file; `submit` only writes a local evidence record
-  with `submitted_to_platform: false`. Wire a real client in separately
-  once the actual API is confirmed from official docs.
-- **Real network target discovery** — no port scanning / service
-  enumeration is implemented; targets are declared by hand in
-  `config/targets.json`.
-- **Live-round polling loop** — the CLI is single-shot per invocation
-  (`solve` runs once and exits). A continuous loop (e.g. run every N
-  seconds during a round) is not implemented; wrap the CLI in a scheduler
-  if needed.
-- **Thread cancellation on timeout** — Python cannot forcibly kill a
-  running thread. A timed-out `attack_fn`/`check_fn` call is *reported*
-  as failed but its thread may keep running in the background until it
-  finishes naturally. `attack_fn`/`check_fn` implementations should use
-  their own socket/HTTP timeouts to bound this.
-- **Concurrency/timeout defaults** (`max_workers=4`, `per_target_timeout_s=10s`,
-  health `timeout_s=5s`) are placeholders, not tuned for any specific
-  competition's network conditions.
-- **Backup retention policy** — `PatchStrategy` writes one timestamped
-  backup per `apply()` call and never deletes old ones; add pruning if
-  disk usage matters.
-- **Process/service restart after a patch** — `patcher.apply()` only
-  rewrites the config file fixture; if a real service needs a restart to
-  pick up changes, that hook is not implemented here.
-- **What "healthy" means per challenge** — `HealthChecker` is fully
-  pluggable (`check_fn`); no generic definition (TCP connect vs HTTP 200
-  vs app-level check) is assumed beyond the example in
-  `tests/fixtures/mock_service.py`.
-- **Flag format** — `RegexExtractor` defaults to a generic `FLAG{...}`
-  pattern; override `pattern=` for the actual competition's format.
-- **Credentials/auth for targets** — no auth handling exists anywhere in
-  this design; add it inside your own `attack_fn`/`check_fn`.
+## CLI examples
+
+Local registry inspection:
+
+```bash
+.venv/bin/attnndef --registry config/targets.example.json discover --role own
+```
+
+Defense dry-run:
+
+```bash
+.venv/bin/attnndef --registry config/targets.json patch \
+  --target-id own-web --search 'DEBUG=true' \
+  --replace 'DEBUG=false' --mode dry-run
+```
+
+Multi-solver wave, dry-run submission:
+
+```bash
+.venv/bin/attnndef --registry config/targets.json \
+  --sink evidence/wave.jsonl wave \
+  --solver web=competition_attacks.web:attack_fn \
+  --solver pwn=competition_attacks.pwn:attack_fn \
+  --endpoint https://OFFICIAL-VERIFIED-ENDPOINT
+```
+
+The endpoint must be explicitly verified from the official event/API. Without `--live-submit`, no submission request is sent. Credentials are read from an environment variable, never committed or printed.
+
+## Safety and privacy defaults
+
+- Real target registry, evidence, archives, references, `.env`, and virtual environments are ignored.
+- No internet-wide scanning or automatic target discovery is included.
+- No exploit runs during installation or tests.
+- Submission is dry-run unless explicitly enabled.
+- Live adapters must be separately reviewed for endpoint, schema, authorization, rate limits, and event scope.
+- Logs should record status, timing, and provenance, not tokens, passwords, or raw flags.
+- Honeypot/anti-cheat signals are evidence for review, not automatic guilt.
+
+## Documentation index
+
+- `docs/ad-learning-roadmap.md` — LKS 2024/2025-aligned learning plan.
+- `docs/competition-runbook.md` — round-by-round operator guide.
+- `docs/gzctf-ad-workflow-analysis.md` — platform and A&D flow synthesis.
+- `docs/wave-controller.md` — multi-solver and submission adapter.
+- `docs/architecture-proposal.md` — architecture decisions.
+- `docs/ai-consultation.md` — consultation evidence and provenance.
+- `docs/source-*.txt` — captured requested documentation pages.
+
+## Contributing a learning module
+
+Prefer small, reviewable labs. Include an objective, prerequisites, safe setup, expected observations, attack explanation, defensive patch, regression test, cleanup, and references. Never include real credentials or unauthorized targets. Label claims as verified, inferred, or unknown when platform behavior is not directly tested.
+
+## License and attribution
+
+Add the final project license before public release. Keep third-party repository licenses and attribution in their respective source projects; this repository does not vendor the ignored `refs/` checkouts.
