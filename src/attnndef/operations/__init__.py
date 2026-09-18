@@ -21,6 +21,15 @@ from .models import (
     WorkflowStatus,
     make_flag_fingerprint,
 )
+from .awareness_models import (
+    CorrelatedEvidenceItem,
+    EvidenceDetailView,
+    FlagRecordView,
+    HealthTrajectory,
+    MissionAwarenessView,
+    TargetAwarenessView,
+)
+from .awareness import SituationalAwarenessService
 from .service import OperationService
 
 __all__ = [
@@ -45,5 +54,12 @@ __all__ = [
     "WorkflowRun",
     "WorkflowStatus",
     "make_flag_fingerprint",
+    "CorrelatedEvidenceItem",
+    "EvidenceDetailView",
+    "FlagRecordView",
+    "HealthTrajectory",
+    "MissionAwarenessView",
+    "TargetAwarenessView",
+    "SituationalAwarenessService",
     "OperationService",
 ]

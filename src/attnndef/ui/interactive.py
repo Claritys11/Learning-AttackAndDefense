@@ -26,6 +26,7 @@ from ..operations import (
     SlaStatus,
     WorkflowRun,
     WorkflowStatus,
+    SituationalAwarenessService,
 )
 from ..targets import Role, Scope, Target, TargetService, diff_history, compare_observations
 from ..tools import (
@@ -1893,6 +1894,8 @@ class InteractiveConsole:
                 "  8. Compare Observations\n"
                 "  9. Complete Mission\n"
                 "  10. Abort Mission\n"
+                "  11. Situational Awareness Dashboard\n"
+                "  12. Inspect Correlated Evidence\n"
                 "  0. Back"
             )
 
@@ -1929,6 +1932,10 @@ class InteractiveConsole:
                     self.output("✓ Mission aborted.")
                 except Exception as exc:
                     self.output(f"✗ Failed to abort mission: {exc}")
+            elif choice == "11":
+                self._cockpit_situational_awareness(m)
+            elif choice == "12":
+                self._cockpit_inspect_evidence(m)
             else:
                 self.output("Invalid selection.")
 
@@ -2264,6 +2271,98 @@ class InteractiveConsole:
             self.output("Observation not found in target history.")
             return
         self.output(compare_observations(observations[older_id], observations[newer_id]).render())
+
+    def _cockpit_situational_awareness(self, m: Mission):
+        awareness_svc = SituationalAwarenessService(
+            self.operation_service,
+            target_service=self.target_service,
+            sink=self.sink,
+        )
+        try:
+            view = awareness_svc.get_mission_awareness(m.mission_id)
+        except Exception as exc:
+            self.output(f"✗ Failed to compile situational awareness: {exc}")
+            return
+
+        lines = [
+            f"\nSITUATIONAL AWARENESS: MISSION #{view.mission_id[:8]}",
+            "─────────────────────────────────────────────────────────────────",
+            "[CONTEXT]",
+            f"  Title:     {view.title}",
+            f"  Objective: {view.objective or '-'}",
+            f"  Target:    {view.target_id} ({view.target_host}) [role: {view.target_role}]",
+            f"  Service:   {view.service_protocol.upper()}/{view.service_port}",
+            f"  Status:    {view.status.upper()} | Workflow: #{view.workflow_id[:8]} ({view.workflow_title})",
+            "",
+            "[INTELLIGENCE POSTURE]",
+            f"  Baseline:  Obs #{view.initial_observation_id or '-'}",
+            f"  Current:   Obs #{view.latest_observation_id or '-'}",
+            f"  Service:   {'OPEN' if view.is_service_open_now else 'CLOSED / NOT OBSERVED'}",
+            f"  Diff:      {view.diff_summary.get('summary', '-')}",
+            "",
+            "[HEALTH & SLA TRAJECTORY]",
+            f"  Status:    {view.last_sla_status or 'NO CHECKS'} (Trajectory: {view.health_trajectory.upper()})",
+            f"  Avg Lat:   {f'{view.avg_latency_ms} ms' if view.avg_latency_ms is not None else '-'}",
+            "",
+            "[OPERATIONS SUMMARY]",
+            f"  Actions:   {view.action_count}",
+            f"  Attacks:   {view.attack_count} {view.attacks_by_status}",
+            f"  Defenses:  {view.defense_count} {view.defenses_by_status}",
+            f"  Flags:     {view.flags_observed} observed, {view.flags_submitted} submitted, {view.flags_rejected} rejected",
+            "",
+            "[CORRELATED EVIDENCE]",
+            f"  {len(view.evidence_items)} evidence artifact(s) correlated",
+            "─────────────────────────────────────────────────────────────────",
+        ]
+        self.output("\n".join(lines))
+
+    def _cockpit_inspect_evidence(self, m: Mission):
+        awareness_svc = SituationalAwarenessService(
+            self.operation_service,
+            target_service=self.target_service,
+            sink=self.sink,
+        )
+        try:
+            view = awareness_svc.get_mission_awareness(m.mission_id)
+        except Exception as exc:
+            self.output(f"✗ Failed to compile situational awareness: {exc}")
+            return
+
+        if not view.evidence_items:
+            self.output("No evidence artifacts linked to this mission.")
+            return
+
+        self.output("\nCORRELATED EVIDENCE ARTIFACTS:")
+        for idx, ev in enumerate(view.evidence_items, 1):
+            ok_str = "OK" if ev.ok else "FAIL"
+            self.output(f"  {idx}. [{ev.id}] {ev.kind} ({ok_str}) - {ev.summary or ev.operation or '-'}")
+        self.output("  0. Cancel")
+
+        sel = self._ask("Select evidence to inspect", "0")
+        if sel == "0":
+            return
+        try:
+            sel_idx = int(sel) - 1
+            if 0 <= sel_idx < len(view.evidence_items):
+                target_ev = view.evidence_items[sel_idx]
+                detail = awareness_svc.inspect_evidence(target_ev.id)
+                if detail:
+                    t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(detail.ts))
+                    self.output(
+                        f"\nEVIDENCE: {detail.id}\n"
+                        f"Time:    {t_str}\n"
+                        f"Kind:    {detail.kind}\n"
+                        f"Target:  {detail.target_id}\n"
+                        f"Status:  {'OK' if detail.ok else 'FAIL'}\n"
+                        f"Payload:\n"
+                        + "\n".join(f"  {k}: {v}" for k, v in detail.payload.items())
+                    )
+                else:
+                    self.output("Evidence not found in sink.")
+            else:
+                self.output("Invalid selection.")
+        except ValueError:
+            self.output("Invalid input.")
 
     def _ad_knowledge(self):
         articles = list_ad_articles()

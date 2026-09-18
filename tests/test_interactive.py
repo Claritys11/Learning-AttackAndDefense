@@ -1,7 +1,10 @@
 import tempfile
+import time
 from attnndef.context import ContextStore, OperatorContext
+from attnndef.core.models import Evidence
 from attnndef.integrations import NmapAdapter, ReconService, ToolResult
-from attnndef.operations import OperationService
+from attnndef.io.sink import LocalSink
+from attnndef.operations import ActionCategory, OperationService
 from attnndef.targets import Role, Scope, Service, Target, TargetService
 from attnndef.ui import InteractiveConsole
 
@@ -368,3 +371,66 @@ def test_interactive_mission_cockpit_flow():
         assert "✓ Flag recorded:" in text
         assert "✓ Verification action recorded:" in text
         assert "✓ Mission completed." in text
+
+
+def test_interactive_mission_awareness_and_evidence_inspection():
+    with tempfile.TemporaryDirectory() as d:
+        db_path = f"{d}/state.db"
+        sink_path = f"{d}/sink.jsonl"
+        store = ContextStore(db_path)
+        store.save(OperatorContext(operator_name="Kai", selected_target="enemy-03", current_round=1, session_id="sess-aware"))
+        targets = TargetService(db_path)
+        targets.add_target(Target("enemy-03", "enemy-03", "10.0.0.13", Role.ENEMY))
+
+        sink = LocalSink(sink_path)
+        ev = Evidence(
+            id="ev-cockpit-01",
+            ts=time.time(),
+            kind="tool_nmap",
+            target_id="enemy-03",
+            ok=True,
+            payload={"summary": "Nmap scan result", "ports": [8080]},
+        )
+        sink.write(ev)
+
+        svc = OperationService(db_path, target_service=targets)
+        svc.create_session(session_id="sess-aware", operator="Kai")
+        svc.start_round("sess-aware", 1)
+        wf = svc.create_workflow("sess-aware", 1, "Awareness Workflow", target_id="enemy-03")
+        m = svc.create_mission(wf.workflow_id, "enemy-03", 8080, title="Awareness Cockpit Mission")
+        svc.start_mission(m.mission_id)
+
+        # Record action linked to evidence
+        svc.record_action(
+            "sess-aware", 1, ActionCategory.RECON, "nmap", "scan", "Port 8080 scan",
+            target_id="enemy-03", workflow_id=wf.workflow_id, mission_id=m.mission_id,
+            evidence_id=ev.id,
+        )
+
+        # Flow:
+        # A&D (3) -> Missions (9) -> Open (3) -> m.mission_id[:8]
+        # In Cockpit:
+        # 11: Situational Awareness View
+        # 12: Inspect Correlated Evidence -> 1 (select first item) -> display payload
+        # 0: Back
+        # 0: Back (from missions menu)
+        # 0: Back (from A&D menu)
+        # 0: Exit (from main menu)
+        answers = iter([
+            "3", "9", "3", m.mission_id[:8],
+            "11",
+            "12", "1",
+            "0",
+            "0", "0", "0"
+        ])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append, sink=sink)
+        console.run()
+        text = "\n".join(output)
+
+        assert f"SITUATIONAL AWARENESS: MISSION #{m.mission_id[:8]}" in text
+        assert "Awareness Cockpit Mission" in text
+        assert "CORRELATED EVIDENCE ARTIFACTS:" in text
+        assert "ev-cockpit-01" in text
+        assert "EVIDENCE: ev-cockpit-01" in text
+        assert "Nmap scan result" in text

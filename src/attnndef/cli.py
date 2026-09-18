@@ -269,6 +269,12 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--timeline", default=None, help="show timeline for mission ID")
     pm.add_argument("--json", action="store_true")
 
+    pa = sub.add_parser("awareness", help="operator situational awareness and evidence correlation")
+    pa.add_argument("--mission", default=None, help="mission ID for mission situational awareness")
+    pa.add_argument("--target", default=None, help="target ID for target situational awareness")
+    pa.add_argument("--evidence", default=None, help="evidence ID for evidence inspection")
+    pa.add_argument("--json", action="store_true", help="output JSON")
+
     return p
 
 
@@ -1065,7 +1071,145 @@ def main(argv=None) -> int:
                         print(f"[{m.mission_id[:8]}]\t{m.status.value.upper():<12}\t[{m.target_id}]\t{svc_str:<10}\t{m.title}")
             return 0
 
+    if args.command == "awareness":
+        from .operations import OperationService
+        from .operations.awareness import SituationalAwarenessService
+        from .targets import TargetService
+        targets_svc = TargetService(args.state_db)
+        ops = OperationService(args.state_db, target_service=targets_svc)
+        awareness_svc = SituationalAwarenessService(ops, target_service=targets_svc, sink=sink)
+
+        if args.evidence:
+            ev = awareness_svc.inspect_evidence(args.evidence)
+            if not ev:
+                raise SystemExit(f"Evidence not found: {args.evidence}")
+            if getattr(args, "json", False):
+                print(json.dumps(ev.to_dict(), default=str, indent=2))
+            else:
+                print(f"EVIDENCE INSPECTION: {ev.id}")
+                print("─────────────────────────────────────────────────────────────────")
+                t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ev.ts))
+                print(f"Time:        {t_str}")
+                print(f"Kind:        {ev.kind}")
+                print(f"Target:      {ev.target_id}")
+                print(f"Status:      {'OK' if ev.ok else 'FAIL'}")
+                print("Payload:")
+                for k, v in ev.payload.items():
+                    print(f"  {k}: {v}")
+            return 0
+
+        elif args.mission:
+            try:
+                m_view = awareness_svc.get_mission_awareness(args.mission)
+            except ValueError as e:
+                raise SystemExit(str(e))
+            if getattr(args, "json", False):
+                print(json.dumps(m_view.to_dict(), default=str, indent=2))
+            else:
+                _print_mission_awareness(m_view)
+            return 0
+
+        elif args.target:
+            try:
+                t_view = awareness_svc.get_target_awareness(args.target)
+            except ValueError as e:
+                raise SystemExit(str(e))
+            if getattr(args, "json", False):
+                print(json.dumps(t_view.to_dict(), default=str, indent=2))
+            else:
+                _print_target_awareness(t_view)
+            return 0
+
+        else:
+            raise SystemExit("awareness requires --mission <mission_id>, --target <target_id>, or --evidence <evidence_id>")
+
     return 1
+
+
+def _print_mission_awareness(view) -> None:
+    print(f"SITUATIONAL AWARENESS: MISSION #{view.mission_id[:8]}")
+    print("─────────────────────────────────────────────────────────────────")
+    print("[CONTEXT]")
+    print(f"  Title:     {view.title}")
+    print(f"  Objective: {view.objective or '-'}")
+    host_str = f" ({view.target_host})" if view.target_host else ""
+    print(f"  Target:    {view.target_id}{host_str} [role: {view.target_role}]")
+    print(f"  Service:   {view.service_protocol.upper()}/{view.service_port}")
+    print(f"  Status:    {view.status.upper()} | Workflow: #{view.workflow_id[:8]} ({view.workflow_title})")
+    print()
+    print("[INTELLIGENCE POSTURE]")
+    init_obs_str = f"Obs #{view.initial_observation_id}" if view.initial_observation_id else "None"
+    curr_obs_str = f"Obs #{view.latest_observation_id}" if view.latest_observation_id else "None"
+    print(f"  Baseline:  {init_obs_str}")
+    print(f"  Current:   {curr_obs_str}")
+    svc_status = "OPEN" if view.is_service_open_now else "CLOSED / NOT OBSERVED"
+    print(f"  Service:   {svc_status}")
+    print(f"  Diff:      {view.diff_summary.get('summary', '-')}")
+    print()
+    print("[HEALTH & SLA TRAJECTORY]")
+    sla_stat = view.last_sla_status or "NO CHECKS"
+    print(f"  Status:    {sla_stat} (Trajectory: {view.health_trajectory.upper()})")
+    lat_str = f"{view.avg_latency_ms} ms" if view.avg_latency_ms is not None else "-"
+    print(f"  Avg Lat:   {lat_str}")
+    print()
+    print("[OPERATIONS SUMMARY]")
+    print(f"  Actions:   {view.action_count}")
+    atk_stat_str = " ".join(f"[{k.upper()}:{v}]" for k, v in view.attacks_by_status.items()) or "[NONE]"
+    print(f"  Attacks:   {view.attack_count} {atk_stat_str}")
+    df_stat_str = " ".join(f"[{k.upper()}:{v}]" for k, v in view.defenses_by_status.items()) or "[NONE]"
+    print(f"  Defenses:  {view.defense_count} {df_stat_str}")
+    print(f"  Flags:     {view.flags_observed} observed, {view.flags_submitted} submitted, {view.flags_rejected} rejected")
+    print()
+    print("[RECENT ACTIVITY]")
+    if not view.timeline:
+        print("  (no activity recorded for this mission)")
+    else:
+        for e in view.timeline[-5:]:
+            t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+            print(f"  {t_str:<8}  [{e.category:<12}] {e.title} [{e.status}]")
+    print()
+    print("[CORRELATED EVIDENCE]")
+    if not view.evidence_items:
+        print("  (no evidence artifacts linked)")
+    else:
+        print(f"  {len(view.evidence_items)} evidence artifact(s) correlated:")
+        for ev in view.evidence_items[:5]:
+            ok_str = "OK" if ev.ok else "FAIL"
+            print(f"  - [{ev.id}] {ev.kind} ({ok_str}): {ev.summary or ev.operation or '-'}")
+
+
+def _print_target_awareness(view) -> None:
+    print(f"SITUATIONAL AWARENESS: TARGET {view.target_id}")
+    print("─────────────────────────────────────────────────────────────────")
+    print("[TARGET IDENTITY]")
+    print(f"  Name:      {view.target_name}")
+    print(f"  Host:      {view.target_host or '-'}")
+    print(f"  Role:      {view.target_role.upper()}")
+    print()
+    print("[CURRENT INTELLIGENCE]")
+    obs_str = f"Obs #{view.latest_observation_id}" if view.latest_observation_id else "None"
+    print(f"  Latest Obs: {obs_str}")
+    srv_lines = ", ".join(f"{s.get('port')}/{s.get('protocol','tcp')}" for s in view.latest_services) or "none recorded"
+    print(f"  Services:   {srv_lines}")
+    print()
+    print("[MISSIONS]")
+    if not view.missions:
+        print("  (no missions registered)")
+    else:
+        for m in view.missions:
+            print(f"  - [{m.get('mission_id', '')[:8]}] {m.get('status', '').upper():<12} {m.get('protocol','tcp').upper()}:{m.get('port')} {m.get('title')}")
+    print()
+    print("[OPERATIONS TOTALS]")
+    print(f"  Actions:  {view.total_actions} | Attacks: {view.total_attacks} | Defenses: {view.total_defenses} | Flags: {view.total_flags}")
+    print(f"  Health:   {view.last_health_status}")
+    print()
+    print("[RECENT ACTIVITY]")
+    if not view.timeline:
+        print("  (no activity recorded for this target)")
+    else:
+        for e in view.timeline[:5]:
+            t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+            print(f"  {t_str:<8}  [{e.category:<12}] {e.title} [{e.status}]")
 
 
 if __name__ == "__main__":
