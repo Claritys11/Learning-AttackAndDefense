@@ -6,10 +6,9 @@ function; since this design must not invent exploit code, it is resolved
 via `--attack-fn module:function` (dotted import path), and must exist in
 the user's own project.
 
-NOTE (UNKNOWN, do not fabricate): `submit` only writes an evidence record
-locally with kind="submission". No GZCTF (or any platform) submission API
-call is implemented, because its exact endpoint/schema was not given and
-must not be guessed.
+The `wave` command orchestrates multiple approved solvers and can call an
+explicitly configured HTTPS/localhost submission endpoint. It is dry-run
+unless `--live-submit` is supplied.
 """
 from __future__ import annotations
 
@@ -53,6 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--role", default="enemy")
     s.add_argument("--max-workers", type=int, default=4)
     s.add_argument("--timeout", type=float, default=10.0)
+
+    w = sub.add_parser("wave", help="run configured solvers and optional explicit submitter")
+    w.add_argument("--solver", action="append", required=True, help="name=module:function")
+    w.add_argument("--endpoint", help="exact verified submit endpoint")
+    w.add_argument("--token-env", default="ATTNDEF_SUBMIT_TOKEN")
+    w.add_argument("--live-submit", action="store_true", help="explicitly enable submission")
+    w.add_argument("--max-workers", type=int, default=4)
+    w.add_argument("--timeout", type=float, default=8.0)
 
     e = sub.add_parser("extract", help="extract flags from a raw-output file")
     e.add_argument("--input", required=True)
@@ -110,6 +117,22 @@ def main(argv=None) -> int:
         results = runner.run(targets)
         for r in results:
             print(json.dumps({"target": r.target_id, "success": r.success, "flag": r.flag}))
+        return 0
+
+    if args.command == "wave":
+        from .attack.controller import SolverSpec, WaveController
+        from .attack.submitter import HttpSubmitter
+        specs = []
+        for raw in args.solver:
+            name, path = raw.split("=", 1)
+            specs.append(SolverSpec(name, path, (), args.max_workers, args.timeout))
+        results, flags = WaveController(specs, sink).run(registry.filter(role=Role("enemy")))
+        submissions = []
+        if args.endpoint:
+            submissions = HttpSubmitter(args.endpoint, args.token_env, live=args.live_submit).submit(flags)
+        elif args.live_submit:
+            raise SystemExit("--live-submit requires --endpoint")
+        print(json.dumps({"results": [r.__dict__ for r in results], "flags_found": len(flags), "submissions": [s.__dict__ for s in submissions]}, default=str))
         return 0
 
     if args.command == "extract":
