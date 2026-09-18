@@ -49,3 +49,73 @@ def test_compare_explicit_observations():
         console = InteractiveConsole(store, lambda _prompt: next(answers), output.append)
         console.run()
         assert "ADDED:" in "\n".join(output)
+
+def test_tools_menu_navigation():
+    with tempfile.TemporaryDirectory() as d:
+        class MockRunner:
+            def run(self, cmd, timeout_s=10.0, cwd=None, input=None):
+                if cmd[0] == "curl":
+                    return ToolResult(tuple(cmd), 0, "HTTP/1.1 200 OK\r\n\r\nHello", "", 1.0, 1.1)
+                elif cmd[0] == "ss":
+                    return ToolResult(tuple(cmd), 0, "LISTEN 0 128 0.0.0.0:80", "", 1.0, 1.1)
+                return ToolResult(tuple(cmd), 0, "", "", 1.0, 1.1)
+
+        store = ContextStore(f"{d}/state.db")
+        store.save(OperatorContext(operator_name="Kai", selected_target="web"))
+        targets = TargetService(f"{d}/state.db")
+        targets.add_target(Target("web", "web", "127.0.0.1", Role.ENEMY))
+
+        # Test: Main menu (2: Tools) -> HTTP (2) -> default inputs -> Back (0) -> Exit (0)
+        answers = iter(["2", "2", "", "", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=MockRunner())
+        console.run()
+        text = "\n".join(output)
+        assert "OPERATOR TOOLS" in text
+        assert "HTTP 200" in text
+
+        # Test: Main menu (2: Tools) -> System Diagnostics (7) -> ss listening (1) -> Back (0) -> Exit (0)
+        answers = iter(["2", "7", "1", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=MockRunner())
+        console.run()
+        text = "\n".join(output)
+        assert "LISTEN 0 128 0.0.0.0:80" in text
+
+def test_ad_and_gzctf_knowledge_console():
+    with tempfile.TemporaryDirectory() as d:
+        store = ContextStore(f"{d}/state.db")
+        store.save(OperatorContext(operator_name="Kai"))
+
+        # Test A&D menu (3) -> select article 1 -> Back (0) -> Exit (0)
+        answers = iter(["3", "1", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append)
+        console.run()
+        text = "\n".join(output)
+        assert "ATTACK & DEFENSE KNOWLEDGE" in text
+        assert "Attack & Defense CTF Overview" in text
+
+        # Test GZCTF menu (4) -> select article 1 -> Back (0) -> Exit (0)
+        answers = iter(["4", "1", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append)
+        console.run()
+        text = "\n".join(output)
+        assert "GZCTF PLATFORM GUIDE" in text
+        assert "GZCTF Attack & Defense Architecture" in text
+
+def test_competition_menu_and_round_advance():
+    with tempfile.TemporaryDirectory() as d:
+        store = ContextStore(f"{d}/state.db")
+        store.save(OperatorContext(operator_name="Kai", current_round=1, platform="jjz.jatimprov.go.id"))
+
+        # Test Competition menu (5) -> Set round (2) -> enter "3" -> Back (0) -> Exit (0)
+        answers = iter(["5", "2", "3", "0", "0"])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append)
+        console.run()
+        text = "\n".join(output)
+        assert "jjz.jatimprov.go.id" in text
+        assert "Active round set to 3." in text
+        assert console.context.current_round == 3

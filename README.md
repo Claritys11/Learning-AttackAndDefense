@@ -1,169 +1,152 @@
-# Learning A&D
+# ATTNNDEF — Attack & Defense Operator Toolkit & Knowledge Base
 
-A community-oriented, local-first Attack & Defense learning repository for LKS-style practice and GZCTF/TCP1P-compatible competition workflows.
+`ATTNNDEF` is a local-first **Attack & Defense operator console + knowledge base** designed for CTF competitions (such as Grand Final A&D on GZCTF / `jjz.jatimprov.go.id`).
 
-> Learn the vulnerability, attack the lab, patch the root cause, preserve the SLA, and prove the fix.
+The project answers the three essential operator questions during competition:
+```text
+"What tool should I use?"
+"What does this A&D concept mean?"
+"How does the competition/platform work?"
+```
 
-## What this project teaches
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                  ATTACK & DEFENSE TOOLKIT                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. TOOLS                                                   │
+│     Practical tools used during A&D: Nmap, HTTP, ffuf,     │
+│     SSH, tcpdump, GDB, and Linux system diagnostics         │
+│                                                             │
+│  2. A&D KNOWLEDGE                                           │
+│     Concepts, workflow, scoring, SLA, tactics, loop         │
+│                                                             │
+│  3. GZCTF                                                   │
+│     Platform architecture, flag mechanics, SLA checker,     │
+│     WireGuard VPN, and competition operations               │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
 
-- Enumeration and service/asset mapping.
-- CVE reproduction and mitigation.
-- Linux and Windows administration/security.
-- SSH, VPN, OAuth2/OIDC, and Active Directory fundamentals.
-- Source-code review and vulnerability modeling.
-- Privilege escalation in isolated labs.
-- Event, process, authentication, and network monitoring.
-- Data-exfiltration modeling and egress control.
-- Firewall, account, password, and scheduler policy.
-- A&D round operations: own-service defense, opponent-service attack, SLA, scoring, evidence, and rollback.
+> **Note**: This repository is **NOT** a vulnerable lab platform, learning-lab framework, or autonomous hacking agent. It provides structured command execution, operational intelligence, and reference knowledge for human operators.
 
-This is an educational project, not a production security platform. Use only against fixtures, VMs, containers, or competition targets where you have explicit authorization.
+---
 
-## Operator console
+## 1. The Three Core Pillars
 
-The primary entry point is now an interactive shell:
+### A. Practical Operator Tools
+Structured, safe subprocess-based execution (`ToolRunner`) with no `shell=True`, bounded timeouts, and POSIX process group cleanup (`killpg`):
+* **Nmap**: Host discovery (`-sn`), port scanning (`-p`), and service detection (`-sV -sC`) with structured XML parsing.
+* **HTTP / Curl**: GET and POST request inspection, custom headers, payload bodies, and HTTP status/header parsing.
+* **ffuf**: Directory and endpoint fuzzing with structured JSON match parsing.
+* **SSH**: Non-interactive command execution on authorized competition VMs using SSH keys (`-i <key>`).
+* **tcpdump**: Bounded packet captures, BPF filtering, and traffic inspection for detecting enemy exploit payloads.
+* **GDB**: Minimal batch inspection (`--batch -ex`) for binary analysis, crash dumps, registers, and backtraces.
+* **System Diagnostics**: Lightweight tools for `ss` (sockets), `ps` (processes), `systemctl` (services), `ip` (addresses/routes), `dig` (DNS), and `wg` (WireGuard status).
+
+### B. Attack & Defense Operational Knowledge
+Practical, competition-tested concepts:
+* **The Operator Execution Loop**: Observe → Recon → Enumerate → Surface → Exploit → Extract → Submit → Patch → Verify → Monitor → Repeat.
+* **Scoring Dynamics**: Attack points, Defense deductions, and SLA availability.
+* **SLA & Availability**: Why "Patched" does not equal "Good Defense" if a patch breaks legitimate functionality or causes service downtime.
+* **Defensive Patching**: Surgical remediation, backup strategies, and smoke testing.
+* **Traffic Monitoring**: Reconstructing enemy payloads from incoming network packets to develop instant patches and counter-attacks.
+
+### C. GZCTF Platform Operations
+Derived directly from primary GZCTF documentation and source:
+* **Round & Tick Cadence**: `AdWarmupSeconds` (warmup period without flags/SLA), `AdTickSeconds` (1-5 min rounds), atomic advance transactions.
+* **Container Lifecycle & Networks**: Per-team challenge containers, `Open` bridge vs `Isolated` bridge (`ad.allowEgress`).
+* **Dynamic Flag Delivery**: `flag{...}` rotating flags delivered via `GZCTF_FLAG_FILE` (`/flag` in Docker via read-only host bind mount; `/gzctf-flag/flag` in Kubernetes).
+* **Flag Expiration**: `AdFlagLifetimeTicks` (flags expire after 3-5 rounds).
+* **SLA Checker**: Independent 10-second cadence, functional verification contracts, exit code semantics (0=pass, 1=fail).
+* **Competition Setup**: WireGuard VPN connection (`wg0`), SSH key authentication, and tournament rules (e.g. `jjz.jatimprov.go.id`).
+
+---
+
+## 2. Architecture
+
+```text
+Operator Console / Direct CLI
+             ↓
+        Tool Service
+             ↓
+        Tool Adapter
+             ↓
+         ToolRunner
+             ↓
+      Subprocess execution
+```
+
+### Safety & Reliability Guarantees
+1. **No `shell=True`**: All commands are constructed as lists of arguments.
+2. **Strict Timeouts**: POSIX process group termination ensures zero dangling child processes.
+3. **Structured Results**: Every run produces normalized outputs (`success`, `timeout`, `not_found`, `permission`, `nonzero_exit`).
+4. **Offline Testable**: Complete test suite runs offline without internet, real VMs, or live platforms.
+
+---
+
+## 3. Quickstart
+
+### Installation
 
 ```bash
-python -m pip install -e .
+git clone https://github.com/Claritys11/Learning-AttackAndDefense.git
+cd Learning-AttackAndDefense
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install pytest
+```
+
+### Running the Operator Console
+
+```bash
 attnndef
 ```
 
-Read [`docs/operator-console.md`](docs/operator-console.md) for first-run configuration, SQLite state, direct CLI compatibility, and the current Phase 1 boundary. The shell reports unavailable workflows honestly while later vertical slices are built.
-
-
-1. Read `docs/quickstart.md` for the shortest working setup.
-2. Read `docs/tools-guide.md` for the command map and function contracts.
-3. Read `docs/ad-learning-roadmap.md` for the 12-week learning path.
-4. Read `docs/competition-runbook.md` for the competition-time operating flow.
-5. Read `docs/gzctf-ad-workflow-analysis.md` for the GZCTF/TCP1P model.
-6. Run the local test suite.
-7. Build one lab module using the six-step cycle: concept → observe → reproduce → attack → defend → verify.
-
-```bash
-git clone <repository-url>
-cd attNdef
-python -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m pip install pytest
-.venv/bin/pytest -q
-```
-
-Expected current baseline: all repository tests pass.
-
-## Repository map
-
+The interactive menu provides quick access to:
 ```text
-src/attnndef/       reusable attack/defense orchestration library
-  core/             typed targets, results, evidence, patch plans
-  attack/           extractor, bounded runner, multi-solver wave, submit adapter
-  defense/          health, patch, rollback, exploit replay
-  io/               structured logs and append-only local evidence
-  cli.py            discover, solve, wave, extract, submit, patch, health, replay
-config/             safe example target registry; real registry stays untracked
-docs/               roadmap, runbooks, GZCTF research, source captures
-labs/               space for community/local learning modules
-tests/              unit, fixture, contract, and orchestration tests
+ATTNNDEF
+────────────────────────────
+  1. Targets
+  2. Tools
+  3. Attack & Defense
+  4. GZCTF
+  5. Competition
+  6. Settings
+  0. Exit
 ```
 
-## Learning workflow
-
-For every topic, create a small isolated lab:
-
-```text
-labs/<topic>/
-  README.md             learning objective and threat model
-  vulnerable/           intentionally vulnerable fixture
-  patched/              expected fixed version
-  attack.py             bounded PoC against the fixture only
-  defense.md            root cause and mitigation
-  tests/                exploit, regression, and SLA tests
-  evidence/             ignored local observations
-```
-
-A module is complete only when:
-
-- the vulnerable behavior is reproducible;
-- the attack has a clear precondition and observable impact;
-- the root cause is explained;
-- the patch is minimal and idempotent;
-- legitimate functionality still passes;
-- exploit replay fails after patching;
-- rollback works;
-- secrets are not committed.
-
-## A&D competition model
-
-```text
-event/challenge manifest
-        -> review/import/build
-        -> service instance per team
-        -> warmup
-        -> repeated round/tick
-             |-- own lane: inspect -> patch -> health/SLA -> replay
-             |-- attack lane: refresh targets -> solver wave -> extract -> submit
-             |-- telemetry: live feed, process, traffic, honeypot, access
-             |-- forensics: evidence, change manifest, snapshots
-        -> scoring and human review
-```
-
-The defender owns its instances. The attacker targets only opponent instances listed by the authorized competition mechanism. The checker exercises the normal service flow, so a patch that simply disables the service is a failed defense.
-
-## CLI examples
-
-Local registry inspection:
+### Running the Test Suite
 
 ```bash
-.venv/bin/attnndef --registry config/targets.example.json discover --role own
+.venv/bin/pytest -v
 ```
 
-Defense dry-run:
+---
 
-```bash
-.venv/bin/attnndef --registry config/targets.json patch \
-  --target-id own-web --search 'DEBUG=true' \
-  --replace 'DEBUG=false' --mode dry-run
-```
+## 4. Documentation Index
 
-Multi-solver wave, dry-run submission:
+- [`docs/architecture.md`](docs/architecture.md): Overall system design and safety boundaries.
+- **Tools**:
+  - [`docs/tools/overview.md`](docs/tools/overview.md): Tool layer architecture and adapters.
+- **Attack & Defense**:
+  - [`docs/attack-defense/overview.md`](docs/attack-defense/overview.md): Match format and dynamics.
+  - [`docs/attack-defense/workflow.md`](docs/attack-defense/workflow.md): The operator execution loop.
+  - [`docs/attack-defense/sla.md`](docs/attack-defense/sla.md): SLA preservation and defensive patching.
+- **GZCTF**:
+  - [`docs/gzctf/overview.md`](docs/gzctf/overview.md): Platform architecture and flag mechanics.
+  - [`docs/gzctf/competition.md`](docs/gzctf/competition.md): Operational guide for GZCTF competitions (VPN, SSH, rules).
 
-```bash
-.venv/bin/attnndef --registry config/targets.json \
-  --sink evidence/wave.jsonl wave \
-  --solver web=competition_attacks.web:attack_fn \
-  --solver pwn=competition_attacks.pwn:attack_fn \
-  --endpoint https://OFFICIAL-VERIFIED-ENDPOINT
-```
+---
 
-The endpoint must be explicitly verified from the official event/API. Without `--live-submit`, no submission request is sent. Credentials are read from an environment variable, never committed or printed.
+## 5. Scope Boundaries
 
-## Safety and privacy defaults
-
-- Real target registry, evidence, archives, references, `.env`, and virtual environments are ignored.
-- No internet-wide scanning or automatic target discovery is included.
-- No exploit runs during installation or tests.
-- Submission is dry-run unless explicitly enabled.
-- Live adapters must be separately reviewed for endpoint, schema, authorization, rate limits, and event scope.
-- Logs should record status, timing, and provenance, not tokens, passwords, or raw flags.
-- Honeypot/anti-cheat signals are evidence for review, not automatic guilt.
-
-## Documentation index
-
-- `docs/quickstart.md` — get started and run the tools.
-- `docs/tools-guide.md` — command map, contracts, and safety gates.
-- `docs/ad-learning-roadmap.md` — LKS 2024/2025-aligned learning plan.
-- `docs/competition-runbook.md` — round-by-round operator guide.
-- `docs/gzctf-ad-workflow-analysis.md` — platform and A&D flow synthesis.
-- `docs/wave-controller.md` — multi-solver and submission adapter.
-- `docs/intelligence-diff.md` — observable target-change comparison.
-- `docs/recon-adapters.md` — scoped tool execution and discovery boundaries.
-- `docs/architecture-proposal.md` — architecture decisions.
-- `docs/ai-consultation.md` — consultation evidence and provenance.
-- `docs/source-*.txt` — captured requested documentation pages.
-
-## Contributing a learning module
-
-Prefer small, reviewable labs. Include an objective, prerequisites, safe setup, expected observations, attack explanation, defensive patch, regression test, cleanup, and references. Never include real credentials or unauthorized targets. Label claims as verified, inferred, or unknown when platform behavior is not directly tested.
-
-## License and attribution
-
-Add the final project license before public release. Keep third-party repository licenses and attribution in their respective source projects; this repository does not vendor the ignored `refs/` checkouts.
+This project strictly adheres to operator-assist boundaries:
+- ❌ No autonomous hacking agents.
+- ❌ No automatic exploit generation or blind mass exploitation.
+- ❌ No platform infrastructure denial-of-service.
+- ❌ No learning-lab fixtures or educational progression systems.
+- ✅ Practical operator tools.
+- ✅ Safe subprocess execution.
+- ✅ Structured operational knowledge.
+- ✅ Platform-accurate GZCTF reference.
