@@ -154,6 +154,8 @@ The endpoint must be explicitly verified from the official event/API. Without `-
 - `docs/competition-runbook.md` — round-by-round operator guide.
 - `docs/gzctf-ad-workflow-analysis.md` — platform and A&D flow synthesis.
 - `docs/wave-controller.md` — multi-solver and submission adapter.
+- `docs/intelligence-diff.md` — observable target-change comparison.
+- `docs/recon-adapters.md` — scoped tool execution and discovery boundaries.
 - `docs/architecture-proposal.md` — architecture decisions.
 - `docs/ai-consultation.md` — consultation evidence and provenance.
 - `docs/source-*.txt` — captured requested documentation pages.
