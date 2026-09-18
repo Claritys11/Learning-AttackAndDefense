@@ -15,7 +15,7 @@ class InteractiveConsole:
 
     def _targets_menu(self):
         while True:
-            self.output("TARGETS\n  1. List Targets\n  2. Select Target\n  3. Add Target\n  4. Remove Target\n  5. Target Details\n  6. Intelligence History\n  0. Back")
+            self.output("TARGETS\n  1. List Targets\n  2. Select Target\n  3. Add Target\n  4. Edit Target\n  5. Remove Target\n  6. Target Details\n  7. Intelligence History\n  0. Back")
             choice = self._ask("Select", "0")
             if choice == "0": return
             if choice == "1":
@@ -36,11 +36,22 @@ class InteractiveConsole:
                 self.target_service.add_target(Target(self._ask("ID"), self._ask("Name"), self._ask("Host"), role_enum, tags))
                 self.output("Target added.")
             elif choice == "4":
+                tid = self._ask("Target ID")
+                current = self.target_service.get_target(tid)
+                if current is None: self.output("Target not found.")
+                else:
+                    role = self._ask("Role", current.role.value).lower()
+                    try: role_enum = Role(role)
+                    except ValueError: self.output("Invalid role."); continue
+                    tags = tuple(x.strip() for x in self._ask("Tags", ",".join(current.tags)).split(",") if x.strip())
+                    self.target_service.update_target(tid, name=self._ask("Name", current.name), host=self._ask("Host", current.host), role=role_enum, tags=tags, notes=self._ask("Notes", current.notes))
+                    self.output("Target updated.")
+            elif choice == "5":
                 self.output("Removed." if self.target_service.remove_target(self._ask("Target ID")) else "Target not found.")
-            elif choice in {"5", "6"}:
+            elif choice in {"6", "7"}:
                 tid = self._ask("Target ID", self.context.selected_target)
                 target = self.target_service.get_target(tid)
-                if choice == "5": self.output(str(target) if target else "Target not found.")
+                if choice == "6": self.output(str(target) if target else "Target not found.")
                 else: self.output("\n".join(str(o) for o in self.target_service.history(tid)) or "No observations.")
 
     def wizard(self):

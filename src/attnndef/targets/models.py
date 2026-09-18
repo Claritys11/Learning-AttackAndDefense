@@ -29,6 +29,7 @@ class Target:
 
 @dataclass(frozen=True)
 class Observation:
+    id: int | None
     target_id: str
     observed_at: float
     session_id: str = ""
