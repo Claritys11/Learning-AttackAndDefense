@@ -5,7 +5,7 @@ __pycache__/
 artifacts/
 .claude-import/
 Attndef.zip
-refs/*/.git/
+refs/*
 .coverage
 .env
 refs/*/.venv/
