@@ -118,13 +118,47 @@ HEALTH
 ### Intelligence Boundary
 * Mission **consumes** existing Target Intelligence via `TargetService`.
 * Mission does **not** create a duplicate service or target store.
+* **Starting Point vs Current Intelligence**: Mission stores `initial_observation_id` as an optional starting point reference, and never stores `current_observation_id`. Current intelligence is always dynamically resolved from Target Intelligence history to prevent dual sources of truth.
+* **Target Intelligence Service Validation**:
+  * Workflow must exist.
+  * Target must exist in registry.
+  * Port must be valid (1–65535).
+  * Protocol must be valid (`tcp` | `udp`).
+  * If `initial_observation_id` is provided:
+    * Observation must exist and belong to the mission's `target_id`.
+    * Specified port and protocol must exist within the observation's recorded services.
+  * If `initial_observation_id` is omitted: Mission creation succeeds without forcing a scan.
 * Running a scan inside a mission strictly adheres to:
   $$\text{Scope} \longrightarrow \text{ReconService} \longrightarrow \text{NmapAdapter} \longrightarrow \text{Observation} \longrightarrow \text{IntelligenceDiff}$$
 * A newly recorded observation does not automatically mutate mission status.
 
 ---
 
-## 4. Verification Workflow
+## 4. Attachment Invariants
+
+When operational records (actions, attacks, defenses, flags, SLA observations) are linked to a Mission, ATTNNDEF strictly enforces the following correlation invariants:
+
+```text
+Attachment Invariants:
+
+1. Mission must exist.
+2. Record must exist.
+3. Record session must equal Mission workflow session.
+4. If record has target_id:
+     record.target_id == mission.target_id
+5. If record has workflow_id:
+     record.workflow_id == mission.workflow_id
+6. If record has mission_id:
+     reject conflicting reassignment unless explicit reassignment API exists.
+7. Never silently mutate workflow_id during attachment.
+```
+
+* **No Silent Workflow Reassignment**: Attachment is strictly a **correlation** operation (`UPDATE ... SET mission_id = ?`). It never mutates `workflow_id` or `target_id`.
+* **Conflict Prevention**: Reassigning a record that is already associated with another mission is strictly rejected.
+
+---
+
+## 5. Verification & Tool Execution Workflow
 
 The Mission Cockpit provides an explicit operator verification flow:
 
@@ -141,6 +175,27 @@ Record Verification
       └── Compare Observations (IntelligenceDiff)
 ```
 
+### Tool Execution Architecture
+When `Run Tool` is invoked from the Mission Cockpit:
+
+```text
+Operator / Mission Cockpit
+           │ (Provides context: target, port, workflow_id, mission_id)
+           ▼
+Existing Tool UI / Canonical Tool Service (NmapService, HttpService, etc.)
+           │
+           ▼
+Scope / ExecutionBoundary (Validates host authorization)
+           │
+           ▼
+ToolRunner (Safe argv execution, POSIX process group, timeout)
+           │
+           ▼
+External Tool Binary
+```
+
+Mission does **not** provide a custom `MissionExecutor` and does not bypass existing tool workflows. Tool execution remains the responsibility of the tool layer, and authorization remains strictly bounded by `Scope`.
+
 ### Separation of Facts
 The system maintains strict independence between operational facts:
 $$\text{Defense COMPLETED} + \text{HTTP 200} \neq \text{Defense SUCCESS (inferred)}$$
@@ -148,7 +203,7 @@ The operator remains the sole authority to evaluate whether a patch works, wheth
 
 ---
 
-## 5. Security & Execution Boundaries
+## 6. Security & Execution Boundaries
 
 1. **No Autonomous Attack Planning**: Missions cannot choose exploits, construct payloads, execute scripts, submit flags, or patch systems autonomously.
 2. **Context vs Scope Authorization**: Assigning `target_id="enemy-03"` to a mission is organizational metadata. It does **not** authorize network packets. Network tools check `Scope.is_allowed(host)` and `ExecutionBoundary.require_allowed(host)`.
@@ -158,7 +213,7 @@ The operator remains the sole authority to evaluate whether a patch works, wheth
 
 ---
 
-## 6. CLI Usage
+## 7. CLI Usage
 
 ### Mission Management
 ```bash
@@ -215,7 +270,7 @@ attnndef timeline --mission <mid>
 
 ---
 
-## 7. Interactive Cockpit Flow
+## 8. Interactive Cockpit Flow
 
 Operators can launch the interactive cockpit via `attnndef console`:
 

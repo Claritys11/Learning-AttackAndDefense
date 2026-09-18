@@ -113,8 +113,22 @@ def test_mission_validation():
         with pytest.raises(ValueError, match="target not found in registry"):
             ops.create_mission(wf.workflow_id, "nonexistent-target", 80, title="Bad Target")
 
+        # Port validation: 1 <= port <= 65535
+        with pytest.raises(ValueError, match="Invalid service port"):
+            ops.create_mission(wf.workflow_id, "enemy-01", 0, title="Bad Port 0")
+        with pytest.raises(ValueError, match="Invalid service port"):
+            ops.create_mission(wf.workflow_id, "enemy-01", -1, title="Negative Port")
+        with pytest.raises(ValueError, match="Invalid service port"):
+            ops.create_mission(wf.workflow_id, "enemy-01", 65536, title="Bad Port 65536")
+
+        # Protocol validation: "tcp" or "udp" only
+        with pytest.raises(ValueError, match="Invalid service protocol"):
+            ops.create_mission(wf.workflow_id, "enemy-01", 80, service_protocol="icmp", title="Bad Protocol")
+        with pytest.raises(ValueError, match="Invalid service protocol"):
+            ops.create_mission(wf.workflow_id, "enemy-01", 80, service_protocol="ftp", title="Bad Protocol")
+
         # Initial observation validation: must belong to target
-        obs = targets.record_observation(
+        obs_other = targets.record_observation(
             Observation(
                 id=None,
                 target_id="enemy-02",
@@ -128,26 +142,58 @@ def test_mission_validation():
                 "enemy-01",
                 80,
                 title="Bad Obs Link",
-                initial_observation_id=obs.id,
+                initial_observation_id=obs_other.id,
             )
 
-        # Correct initial observation
+        # Service existence in observation: port/protocol must exist in matched observation
         obs_correct = targets.record_observation(
             Observation(
                 id=None,
                 target_id="enemy-01",
                 observed_at=time.time(),
-                services=(Service(port=8080, name="http"),),
+                services=(Service(port=8080, protocol="tcp", name="http"),),
             )
         )
+        with pytest.raises(ValueError, match="Service TCP:22 not found in observation"):
+            ops.create_mission(
+                wf.workflow_id,
+                "enemy-01",
+                22,
+                title="Port Missing in Obs",
+                initial_observation_id=obs_correct.id,
+            )
+        with pytest.raises(ValueError, match="Service UDP:8080 not found in observation"):
+            ops.create_mission(
+                wf.workflow_id,
+                "enemy-01",
+                8080,
+                service_protocol="udp",
+                title="Protocol Missing in Obs",
+                initial_observation_id=obs_correct.id,
+            )
+
+        # Correct initial observation with matching service
         m = ops.create_mission(
             wf.workflow_id,
             "enemy-01",
             8080,
+            service_protocol="tcp",
             title="Good Obs Link",
             initial_observation_id=obs_correct.id,
         )
         assert m.initial_observation_id == obs_correct.id
+        assert not hasattr(m, "current_observation_id")  # Never store current_observation_id on Mission
+
+        # Creation without observation succeeds (no forced scan)
+        m_no_obs = ops.create_mission(
+            wf.workflow_id,
+            "enemy-01",
+            3306,
+            service_protocol="tcp",
+            title="No Obs Mission",
+            initial_observation_id=None,
+        )
+        assert m_no_obs.initial_observation_id is None
 
 
 def test_cross_target_and_cross_workflow_rejection():
@@ -162,6 +208,7 @@ def test_cross_target_and_cross_workflow_rejection():
         )
 
         m = ops.create_mission(wf1.workflow_id, "enemy-01", 8080, title="Mission 1")
+        m_second = ops.create_mission(wf1.workflow_id, "enemy-01", 8080, title="Mission 2")
 
         # Action on different target rejected
         act_diff_target = ops.record_action(
@@ -243,6 +290,86 @@ def test_cross_target_and_cross_workflow_rejection():
         )
         with pytest.raises(ValueError, match="Cross-target attachment rejected"):
             ops.attach_sla_to_mission(sla_diff_tgt.id, m.mission_id)
+
+        # Conflicting reassignment rejection for action, attack, defense, flag, sla
+        # 1. Action
+        act_valid = ops.record_action(
+            session.session_id,
+            1,
+            ActionCategory.RECON,
+            "nmap",
+            "scan",
+            "Valid scan",
+            target_id="enemy-01",
+            workflow_id=wf1.workflow_id,
+        )
+        assert ops.attach_action_to_mission(act_valid.id, m.mission_id) is True
+        with pytest.raises(ValueError, match="Conflicting mission reassignment rejected"):
+            ops.attach_action_to_mission(act_valid.id, m_second.mission_id)
+
+        # 2. Attack
+        atk_valid = ops.record_attack(
+            1,
+            "enemy-01",
+            "http/8080",
+            "sqli",
+            workflow_id=wf1.workflow_id,
+        )
+        assert ops.attach_attack_to_mission(atk_valid.id, m.mission_id) is True
+        with pytest.raises(ValueError, match="Conflicting mission reassignment rejected"):
+            ops.attach_attack_to_mission(atk_valid.id, m_second.mission_id)
+
+        # 3. Defense
+        def_valid = ops.record_defense(
+            1,
+            "enemy-01",
+            "http/8080",
+            "patch",
+            workflow_id=wf1.workflow_id,
+        )
+        assert ops.attach_defense_to_mission(def_valid.id, m.mission_id) is True
+        with pytest.raises(ValueError, match="Conflicting mission reassignment rejected"):
+            ops.attach_defense_to_mission(def_valid.id, m_second.mission_id)
+
+        # 4. Flag
+        flg_valid = ops.record_flag(
+            1,
+            "enemy-01",
+            "curl",
+            "flag{secret}",
+            workflow_id=wf1.workflow_id,
+        )
+        assert ops.attach_flag_to_mission(flg_valid.id, m.mission_id) is True
+        with pytest.raises(ValueError, match="Conflicting mission reassignment rejected"):
+            ops.attach_flag_to_mission(flg_valid.id, m_second.mission_id)
+
+        # 5. SLA
+        sla_valid = ops.record_sla(
+            1,
+            "enemy-01",
+            "http/8080",
+            SlaStatus.OK,
+            workflow_id=wf1.workflow_id,
+        )
+        assert ops.attach_sla_to_mission(sla_valid.id, m.mission_id) is True
+        with pytest.raises(ValueError, match="Conflicting mission reassignment rejected"):
+            ops.attach_sla_to_mission(sla_valid.id, m_second.mission_id)
+
+        # Invariant: Never silently mutate workflow_id during attachment
+        act_no_wf = ops.record_action(
+            session.session_id,
+            1,
+            ActionCategory.RECON,
+            "nmap",
+            "scan",
+            "Action with no workflow",
+            target_id="enemy-01",
+            workflow_id=None,
+        )
+        ops.attach_action_to_mission(act_no_wf.id, m.mission_id)
+        act_reloaded = ops.get_action(act_no_wf.id)
+        assert act_reloaded.mission_id == m.mission_id
+        assert act_reloaded.workflow_id is None  # NOT silently mutated to m.workflow_id
 
 
 def test_operational_records_with_mission_and_timeline():

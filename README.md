@@ -3,6 +3,7 @@
 `ATTNNDEF` is a local-first **Attack & Defense operator console + knowledge base** designed for CTF competitions (such as Grand Final A&D on GZCTF / `jjz.jatimprov.go.id`).
 
 The project answers the three essential operator questions during competition:
+
 ```text
 "What tool should I use?"
 "What does this A&D concept mean?"
@@ -35,7 +36,9 @@ The project answers the three essential operator questions during competition:
 ## 1. The Three Core Pillars
 
 ### A. Practical Operator Tools
+
 Structured, safe subprocess-based execution (`ToolRunner`) with no `shell=True`, bounded timeouts, and POSIX process group cleanup (`killpg`):
+
 * **Nmap**: Host discovery (`-sn`), port scanning (`-p`), and service detection (`-sV -sC`) with structured XML parsing.
 * **HTTP / Curl**: GET and POST request inspection, custom headers, payload bodies, and HTTP status/header parsing.
 * **ffuf**: Directory and endpoint fuzzing with structured JSON match parsing.
@@ -45,7 +48,9 @@ Structured, safe subprocess-based execution (`ToolRunner`) with no `shell=True`,
 * **System Diagnostics**: Lightweight tools for `ss` (sockets), `ps` (processes), `systemctl` (services), `ip` (addresses/routes), `dig` (DNS), and `wg` (WireGuard status).
 
 ### B. Attack & Defense Operational Knowledge
+
 Practical, competition-tested concepts:
+
 * **The Operator Execution Loop**: Observe → Recon → Enumerate → Surface → Exploit → Extract → Submit → Patch → Verify → Monitor → Repeat.
 * **Scoring Dynamics**: Attack points, Defense deductions, and SLA availability.
 * **SLA & Availability**: Why "Patched" does not equal "Good Defense" if a patch breaks legitimate functionality or causes service downtime.
@@ -53,7 +58,9 @@ Practical, competition-tested concepts:
 * **Traffic Monitoring**: Analyzing incoming network traffic to understand adversary behavior, identify unpatched flaws, harden services, and verify defense.
 
 ### C. GZCTF Platform Operations
+
 Derived directly from primary GZCTF documentation and source:
+
 * **Round & Tick Cadence**: `AdWarmupSeconds` (warmup period without flags/SLA, default 1800s), `AdTickSeconds` (engine default 60s, clamped 15-3600s; tournament-configured e.g. 1-5 mins), atomic advance transactions.
 * **Container Lifecycle & Networks**: Per-team challenge containers, `Open` bridge vs `Isolated` bridge (`ad.allowEgress`).
 * **Dynamic Flag Delivery**: `flag{...}` rotating flags delivered via `GZCTF_FLAG_FILE` (`/flag` in Docker via read-only host bind mount; `/gzctf-flag/flag` in Kubernetes).
@@ -78,6 +85,7 @@ Operator Console / Direct CLI
 ```
 
 ### Safety & Reliability Guarantees
+
 1. **No `shell=True`**: All commands are constructed as lists of arguments.
 2. **Strict Timeouts**: POSIX process group termination ensures zero dangling child processes.
 3. **Structured Results**: Every run produces normalized outputs (`success`, `timeout`, `not_found`, `permission`, `nonzero_exit`).
@@ -104,6 +112,7 @@ attnndef
 ```
 
 The interactive menu provides quick access to:
+
 ```text
 ATTNNDEF
 ────────────────────────────
@@ -142,6 +151,7 @@ ATTNNDEF
 ## 5. Scope Boundaries
 
 This project strictly adheres to operator-assist boundaries:
+
 - ❌ No autonomous hacking agents.
 - ❌ No automatic exploit generation or blind mass exploitation.
 - ❌ No platform infrastructure denial-of-service.

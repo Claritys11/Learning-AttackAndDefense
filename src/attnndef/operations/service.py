@@ -1519,10 +1519,25 @@ class OperationService:
         if not wf:
             raise ValueError(f"Workflow not found: {workflow_id}")
         self._validate_target(target_id)
+        if not (1 <= service_port <= 65535):
+            raise ValueError(f"Invalid service port: {service_port} (must be between 1 and 65535)")
+        service_protocol = service_protocol.lower().strip()
+        if service_protocol not in ("tcp", "udp"):
+            raise ValueError(f"Invalid service protocol: {service_protocol} (must be 'tcp' or 'udp')")
+
         if initial_observation_id is not None and self.target_service is not None:
             hist = self.target_service.history(target_id, limit=200)
-            if not any(o.id == initial_observation_id for o in hist):
+            matched_obs = next((o for o in hist if o.id == initial_observation_id), None)
+            if not matched_obs:
                 raise ValueError(f"Observation {initial_observation_id} not found for target {target_id}")
+            has_service = any(
+                s.port == service_port and s.protocol.lower() == service_protocol
+                for s in matched_obs.services
+            )
+            if not has_service:
+                raise ValueError(
+                    f"Service {service_protocol.upper()}:{service_port} not found in observation #{initial_observation_id}"
+                )
 
         mid = mission_id or str(uuid.uuid4())
         now = time.time()
@@ -1677,6 +1692,10 @@ class OperationService:
         action = self.get_action(action_id)
         if not action:
             raise ValueError(f"Action not found: {action_id}")
+        if action.mission_id and action.mission_id != mission_id:
+            raise ValueError(
+                f"Conflicting mission reassignment rejected: action already assigned to mission {action.mission_id}"
+            )
         if action.target_id and action.target_id != m.target_id:
             raise ValueError(
                 f"Cross-target attachment rejected: action target {action.target_id} != mission target {m.target_id}"
@@ -1692,8 +1711,8 @@ class OperationService:
             )
         with self._db() as db:
             cur = db.execute(
-                "UPDATE operator_actions SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?), target_id = COALESCE(target_id, ?) WHERE id = ?",
-                (mission_id, m.workflow_id, m.target_id, action_id),
+                "UPDATE operator_actions SET mission_id = ? WHERE id = ?",
+                (mission_id, action_id),
             )
         return cur.rowcount > 0
 
@@ -1704,6 +1723,10 @@ class OperationService:
         atk = self.get_attack(attack_id)
         if not atk:
             raise ValueError(f"Attack not found: {attack_id}")
+        if atk.mission_id and atk.mission_id != mission_id:
+            raise ValueError(
+                f"Conflicting mission reassignment rejected: attack already assigned to mission {atk.mission_id}"
+            )
         if atk.target_id != m.target_id:
             raise ValueError(
                 f"Cross-target attachment rejected: attack target {atk.target_id} != mission target {m.target_id}"
@@ -1720,8 +1743,8 @@ class OperationService:
             )
         with self._db() as db:
             cur = db.execute(
-                "UPDATE attack_records SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?) WHERE id = ?",
-                (mission_id, m.workflow_id, attack_id),
+                "UPDATE attack_records SET mission_id = ? WHERE id = ?",
+                (mission_id, attack_id),
             )
         return cur.rowcount > 0
 
@@ -1732,6 +1755,10 @@ class OperationService:
         df = self.get_defense(defense_id)
         if not df:
             raise ValueError(f"Defense not found: {defense_id}")
+        if df.mission_id and df.mission_id != mission_id:
+            raise ValueError(
+                f"Conflicting mission reassignment rejected: defense already assigned to mission {df.mission_id}"
+            )
         if df.target_id != m.target_id:
             raise ValueError(
                 f"Cross-target attachment rejected: defense target {df.target_id} != mission target {m.target_id}"
@@ -1748,8 +1775,8 @@ class OperationService:
             )
         with self._db() as db:
             cur = db.execute(
-                "UPDATE defense_records SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?) WHERE id = ?",
-                (mission_id, m.workflow_id, defense_id),
+                "UPDATE defense_records SET mission_id = ? WHERE id = ?",
+                (mission_id, defense_id),
             )
         return cur.rowcount > 0
 
@@ -1760,6 +1787,10 @@ class OperationService:
         flg = self.get_flag(flag_id)
         if not flg:
             raise ValueError(f"Flag record not found: {flag_id}")
+        if flg.mission_id and flg.mission_id != mission_id:
+            raise ValueError(
+                f"Conflicting mission reassignment rejected: flag already assigned to mission {flg.mission_id}"
+            )
         if flg.target_id != m.target_id:
             raise ValueError(
                 f"Cross-target attachment rejected: flag target {flg.target_id} != mission target {m.target_id}"
@@ -1776,8 +1807,8 @@ class OperationService:
             )
         with self._db() as db:
             cur = db.execute(
-                "UPDATE flag_records SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?) WHERE id = ?",
-                (mission_id, m.workflow_id, flag_id),
+                "UPDATE flag_records SET mission_id = ? WHERE id = ?",
+                (mission_id, flag_id),
             )
         return cur.rowcount > 0
 
@@ -1788,6 +1819,10 @@ class OperationService:
         sla = self.get_sla(sla_id)
         if not sla:
             raise ValueError(f"SLA observation not found: {sla_id}")
+        if sla.mission_id and sla.mission_id != mission_id:
+            raise ValueError(
+                f"Conflicting mission reassignment rejected: SLA observation already assigned to mission {sla.mission_id}"
+            )
         if sla.target_id != m.target_id:
             raise ValueError(
                 f"Cross-target attachment rejected: SLA target {sla.target_id} != mission target {m.target_id}"
@@ -1804,8 +1839,8 @@ class OperationService:
             )
         with self._db() as db:
             cur = db.execute(
-                "UPDATE sla_observations SET mission_id = ?, workflow_id = COALESCE(workflow_id, ?) WHERE id = ?",
-                (mission_id, m.workflow_id, sla_id),
+                "UPDATE sla_observations SET mission_id = ? WHERE id = ?",
+                (mission_id, sla_id),
             )
         return cur.rowcount > 0
 
