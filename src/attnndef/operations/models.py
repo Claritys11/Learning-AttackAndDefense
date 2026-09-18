@@ -55,6 +55,26 @@ class Tick:
     status: str = "observed"
 
 
+class WorkflowStatus(str, Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    ABORTED = "aborted"
+
+
+@dataclass(frozen=True)
+class WorkflowRun:
+    workflow_id: str
+    session_id: str
+    round_id: int
+    title: str
+    objective: str = ""
+    target_id: str | None = None
+    started_at: float = field(default_factory=time.time)
+    completed_at: float | None = None
+    status: WorkflowStatus = WorkflowStatus.ACTIVE
+    notes: str = ""
+
+
 class ActionCategory(str, Enum):
     RECON = "recon"
     ATTACK = "attack"
@@ -78,6 +98,9 @@ class OperatorAction:
     status: str = "completed"
     evidence_id: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    workflow_id: str | None = None
+    parent_action_id: str | None = None
+    tool_execution_id: str | None = None
 
 
 class AttackStatus(str, Enum):
@@ -100,6 +123,7 @@ class AttackRecord:
     completed_at: float | None = None
     notes: str = ""
     evidence_id: str | None = None
+    workflow_id: str | None = None
 
 
 class DefenseStatus(str, Enum):
@@ -122,6 +146,7 @@ class DefenseRecord:
     completed_at: float | None = None
     notes: str = ""
     evidence_id: str | None = None
+    workflow_id: str | None = None
 
 
 class FlagStatus(str, Enum):
@@ -145,6 +170,7 @@ class FlagRecord:
     flag_preview: str = ""
     notes: str = ""
     evidence_id: str | None = None
+    workflow_id: str | None = None
 
 
 class SlaStatus(str, Enum):
@@ -165,6 +191,7 @@ class SlaObservation:
     latency_ms: float | None = None
     source: str = "local"
     details: dict[str, Any] = field(default_factory=dict)
+    workflow_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -177,6 +204,7 @@ class TimelineEntry:
     title: str
     status: str
     details: str = ""
+    workflow_id: str | None = None
 
 
 def make_flag_fingerprint(raw_flag: str) -> tuple[str, str]:

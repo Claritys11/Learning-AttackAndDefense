@@ -23,6 +23,8 @@ from .models import (
     SlaStatus,
     TimelineEntry,
     Tick,
+    WorkflowRun,
+    WorkflowStatus,
     make_flag_fingerprint,
 )
 
@@ -144,13 +146,53 @@ class OperationService:
                 details TEXT NOT NULL DEFAULT '{}'
             );
 
+            CREATE TABLE IF NOT EXISTS operational_workflows (
+                workflow_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                round_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                objective TEXT NOT NULL DEFAULT '',
+                target_id TEXT,
+                started_at REAL NOT NULL,
+                completed_at REAL,
+                status TEXT NOT NULL,
+                notes TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY(session_id) REFERENCES operational_sessions(session_id) ON DELETE CASCADE,
+                FOREIGN KEY(round_id) REFERENCES operational_rounds(round_id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_operator_actions_round ON operator_actions(round_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_operator_actions_target ON operator_actions(target_id);
             CREATE INDEX IF NOT EXISTS idx_attack_records_round ON attack_records(round_id);
             CREATE INDEX IF NOT EXISTS idx_defense_records_round ON defense_records(round_id);
             CREATE INDEX IF NOT EXISTS idx_flag_records_round ON flag_records(round_id);
             CREATE INDEX IF NOT EXISTS idx_sla_obs_target ON sla_observations(target_id, observed_at);
+            CREATE INDEX IF NOT EXISTS idx_workflows_session ON operational_workflows(session_id);
+            CREATE INDEX IF NOT EXISTS idx_workflows_round ON operational_workflows(round_id);
+            CREATE INDEX IF NOT EXISTS idx_workflows_target ON operational_workflows(target_id);
+            CREATE INDEX IF NOT EXISTS idx_workflows_status ON operational_workflows(status);
             """)
+
+            def _migrate_col(table: str, col: str, col_type: str):
+                cur = db.execute(f"PRAGMA table_info({table})")
+                cols = [r["name"] for r in cur.fetchall()]
+                if col not in cols:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+
+            _migrate_col("operator_actions", "workflow_id", "TEXT")
+            _migrate_col("operator_actions", "parent_action_id", "TEXT")
+            _migrate_col("operator_actions", "tool_execution_id", "TEXT")
+            _migrate_col("attack_records", "workflow_id", "TEXT")
+            _migrate_col("defense_records", "workflow_id", "TEXT")
+            _migrate_col("flag_records", "workflow_id", "TEXT")
+            _migrate_col("sla_observations", "workflow_id", "TEXT")
+
+            db.execute("CREATE INDEX IF NOT EXISTS idx_actions_workflow ON operator_actions(workflow_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_actions_parent ON operator_actions(parent_action_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_attacks_workflow ON attack_records(workflow_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_defenses_workflow ON defense_records(workflow_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_flags_workflow ON flag_records(workflow_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_sla_workflow ON sla_observations(workflow_id)")
 
     def _validate_target(self, target_id: str | None):
         if not target_id:
@@ -292,6 +334,7 @@ class OperationService:
                     round_id, session_id, round_number, started_at, status
                 ) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(round_id) DO UPDATE SET
+                    session_id = excluded.session_id,
                     status = excluded.status,
                     started_at = excluded.started_at,
                     ended_at = NULL""",
@@ -418,8 +461,24 @@ class OperationService:
         evidence_id: str | None = None,
         details: dict | None = None,
         timestamp: float | None = None,
+        workflow_id: str | None = None,
+        parent_action_id: str | None = None,
+        tool_execution_id: str | None = None,
     ) -> OperatorAction:
         self._validate_target(target_id)
+        if workflow_id:
+            wf = self.get_workflow(workflow_id)
+            if not wf:
+                raise ValueError(f"Workflow not found: {workflow_id}")
+            if wf.session_id != session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: action belongs to session {session_id}, workflow to {wf.session_id}"
+                )
+        if parent_action_id:
+            parent = self.get_action(parent_action_id)
+            if not parent:
+                raise ValueError(f"Parent action not found: {parent_action_id}")
+
         action_id = str(uuid.uuid4())
         ts = timestamp or time.time()
         details_json = json.dumps(details or {}, sort_keys=True)
@@ -427,8 +486,9 @@ class OperationService:
             db.execute(
                 """INSERT INTO operator_actions(
                     id, session_id, round_id, timestamp, category, target_id,
-                    tool, operation, summary, status, evidence_id, details
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    tool, operation, summary, status, evidence_id, details,
+                    workflow_id, parent_action_id, tool_execution_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     action_id,
                     session_id,
@@ -442,6 +502,9 @@ class OperationService:
                     status,
                     evidence_id,
                     details_json,
+                    workflow_id,
+                    parent_action_id,
+                    tool_execution_id,
                 ),
             )
         return OperatorAction(
@@ -457,6 +520,33 @@ class OperationService:
             status=status,
             evidence_id=evidence_id,
             details=details or {},
+            workflow_id=workflow_id,
+            parent_action_id=parent_action_id,
+            tool_execution_id=tool_execution_id,
+        )
+
+    def get_action(self, action_id: str) -> OperatorAction | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM operator_actions WHERE id = ?", (action_id,)).fetchone()
+        if not row:
+            return None
+        keys = row.keys()
+        return OperatorAction(
+            id=row["id"],
+            session_id=row["session_id"],
+            round_id=row["round_id"],
+            timestamp=row["timestamp"],
+            category=ActionCategory(row["category"]),
+            target_id=row["target_id"],
+            tool=row["tool"],
+            operation=row["operation"],
+            summary=row["summary"],
+            status=row["status"],
+            evidence_id=row["evidence_id"],
+            details=json.loads(row["details"]),
+            workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
+            parent_action_id=row["parent_action_id"] if "parent_action_id" in keys else None,
+            tool_execution_id=row["tool_execution_id"] if "tool_execution_id" in keys else None,
         )
 
     def list_actions(
@@ -464,6 +554,7 @@ class OperationService:
         round_id: int | None = None,
         target_id: str | None = None,
         category: ActionCategory | None = None,
+        workflow_id: str | None = None,
         limit: int = 100,
     ) -> list[OperatorAction]:
         query = "SELECT * FROM operator_actions WHERE 1=1"
@@ -477,6 +568,9 @@ class OperationService:
         if category is not None:
             query += " AND category = ?"
             params.append(category.value)
+        if workflow_id is not None:
+            query += " AND workflow_id = ?"
+            params.append(workflow_id)
         query += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
 
@@ -496,6 +590,9 @@ class OperationService:
                 status=r["status"],
                 evidence_id=r["evidence_id"],
                 details=json.loads(r["details"]),
+                workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
+                parent_action_id=r["parent_action_id"] if "parent_action_id" in r.keys() else None,
+                tool_execution_id=r["tool_execution_id"] if "tool_execution_id" in r.keys() else None,
             )
             for r in rows
         ]
@@ -512,17 +609,27 @@ class OperationService:
         status: AttackStatus = AttackStatus.PLANNED,
         notes: str = "",
         evidence_id: str | None = None,
+        workflow_id: str | None = None,
         started_at: float | None = None,
     ) -> AttackRecord:
         self._validate_target(target_id)
+        if workflow_id:
+            wf = self.get_workflow(workflow_id)
+            if not wf:
+                raise ValueError(f"Workflow not found: {workflow_id}")
+            rnd = self.get_round(round_id)
+            if rnd and rnd.session_id != wf.session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: attack round belongs to session {rnd.session_id}, workflow to {wf.session_id}"
+                )
         attack_id = str(uuid.uuid4())
         started = started_at or time.time()
         with self._db() as db:
             db.execute(
                 """INSERT INTO attack_records(
-                    id, round_id, target_id, service, method, status, started_at, notes, evidence_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (attack_id, round_id, target_id, service, method, status.value, started, notes, evidence_id),
+                    id, round_id, target_id, service, method, status, started_at, notes, evidence_id, workflow_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (attack_id, round_id, target_id, service, method, status.value, started, notes, evidence_id, workflow_id),
             )
         return AttackRecord(
             id=attack_id,
@@ -534,6 +641,27 @@ class OperationService:
             started_at=started,
             notes=notes,
             evidence_id=evidence_id,
+            workflow_id=workflow_id,
+        )
+
+    def get_attack(self, attack_id: str) -> AttackRecord | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM attack_records WHERE id = ?", (attack_id,)).fetchone()
+        if not row:
+            return None
+        keys = row.keys()
+        return AttackRecord(
+            id=row["id"],
+            round_id=row["round_id"],
+            target_id=row["target_id"],
+            service=row["service"],
+            method=row["method"],
+            status=AttackStatus(row["status"]),
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            notes=row["notes"],
+            evidence_id=row["evidence_id"],
+            workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
         )
 
     def update_attack_status(
@@ -559,7 +687,11 @@ class OperationService:
         return cur.rowcount > 0
 
     def list_attacks(
-        self, round_id: int | None = None, target_id: str | None = None, limit: int = 100
+        self,
+        round_id: int | None = None,
+        target_id: str | None = None,
+        workflow_id: str | None = None,
+        limit: int = 100,
     ) -> list[AttackRecord]:
         query = "SELECT * FROM attack_records WHERE 1=1"
         params: list = []
@@ -569,6 +701,9 @@ class OperationService:
         if target_id is not None:
             query += " AND target_id = ?"
             params.append(target_id)
+        if workflow_id is not None:
+            query += " AND workflow_id = ?"
+            params.append(workflow_id)
         query += " ORDER BY started_at DESC LIMIT ?"
         params.append(limit)
 
@@ -586,6 +721,7 @@ class OperationService:
                 completed_at=r["completed_at"],
                 notes=r["notes"],
                 evidence_id=r["evidence_id"],
+                workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
             )
             for r in rows
         ]
@@ -602,17 +738,27 @@ class OperationService:
         status: DefenseStatus = DefenseStatus.PLANNED,
         notes: str = "",
         evidence_id: str | None = None,
+        workflow_id: str | None = None,
         started_at: float | None = None,
     ) -> DefenseRecord:
         self._validate_target(target_id)
+        if workflow_id:
+            wf = self.get_workflow(workflow_id)
+            if not wf:
+                raise ValueError(f"Workflow not found: {workflow_id}")
+            rnd = self.get_round(round_id)
+            if rnd and rnd.session_id != wf.session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: defense round belongs to session {rnd.session_id}, workflow to {wf.session_id}"
+                )
         defense_id = str(uuid.uuid4())
         started = started_at or time.time()
         with self._db() as db:
             db.execute(
                 """INSERT INTO defense_records(
-                    id, round_id, target_id, service, action, status, started_at, notes, evidence_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (defense_id, round_id, target_id, service, action, status.value, started, notes, evidence_id),
+                    id, round_id, target_id, service, action, status, started_at, notes, evidence_id, workflow_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (defense_id, round_id, target_id, service, action, status.value, started, notes, evidence_id, workflow_id),
             )
         return DefenseRecord(
             id=defense_id,
@@ -624,6 +770,27 @@ class OperationService:
             started_at=started,
             notes=notes,
             evidence_id=evidence_id,
+            workflow_id=workflow_id,
+        )
+
+    def get_defense(self, defense_id: str) -> DefenseRecord | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM defense_records WHERE id = ?", (defense_id,)).fetchone()
+        if not row:
+            return None
+        keys = row.keys()
+        return DefenseRecord(
+            id=row["id"],
+            round_id=row["round_id"],
+            target_id=row["target_id"],
+            service=row["service"],
+            action=row["action"],
+            status=DefenseStatus(row["status"]),
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            notes=row["notes"],
+            evidence_id=row["evidence_id"],
+            workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
         )
 
     def update_defense_status(
@@ -649,7 +816,11 @@ class OperationService:
         return cur.rowcount > 0
 
     def list_defenses(
-        self, round_id: int | None = None, target_id: str | None = None, limit: int = 100
+        self,
+        round_id: int | None = None,
+        target_id: str | None = None,
+        workflow_id: str | None = None,
+        limit: int = 100,
     ) -> list[DefenseRecord]:
         query = "SELECT * FROM defense_records WHERE 1=1"
         params: list = []
@@ -659,6 +830,9 @@ class OperationService:
         if target_id is not None:
             query += " AND target_id = ?"
             params.append(target_id)
+        if workflow_id is not None:
+            query += " AND workflow_id = ?"
+            params.append(workflow_id)
         query += " ORDER BY started_at DESC LIMIT ?"
         params.append(limit)
 
@@ -676,6 +850,7 @@ class OperationService:
                 completed_at=r["completed_at"],
                 notes=r["notes"],
                 evidence_id=r["evidence_id"],
+                workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
             )
             for r in rows
         ]
@@ -692,9 +867,19 @@ class OperationService:
         status: FlagStatus = FlagStatus.OBSERVED,
         notes: str = "",
         evidence_id: str | None = None,
+        workflow_id: str | None = None,
         observed_at: float | None = None,
     ) -> FlagRecord:
         self._validate_target(target_id)
+        if workflow_id:
+            wf = self.get_workflow(workflow_id)
+            if not wf:
+                raise ValueError(f"Workflow not found: {workflow_id}")
+            rnd = self.get_round(round_id)
+            if rnd and rnd.session_id != wf.session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: flag round belongs to session {rnd.session_id}, workflow to {wf.session_id}"
+                )
         flag_id = str(uuid.uuid4())
         ts = observed_at or time.time()
 
@@ -712,8 +897,8 @@ class OperationService:
             db.execute(
                 """INSERT INTO flag_records(
                     id, round_id, target_id, source, observed_at, status,
-                    fingerprint, flag_preview, notes, evidence_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    fingerprint, flag_preview, notes, evidence_id, workflow_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     flag_id,
                     round_id,
@@ -725,6 +910,7 @@ class OperationService:
                     flag_preview,
                     notes,
                     evidence_id,
+                    workflow_id,
                 ),
             )
         return FlagRecord(
@@ -738,6 +924,27 @@ class OperationService:
             flag_preview=flag_preview,
             notes=notes,
             evidence_id=evidence_id,
+            workflow_id=workflow_id,
+        )
+
+    def get_flag(self, flag_id: str) -> FlagRecord | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM flag_records WHERE id = ?", (flag_id,)).fetchone()
+        if not row:
+            return None
+        keys = row.keys()
+        return FlagRecord(
+            id=row["id"],
+            round_id=row["round_id"],
+            target_id=row["target_id"],
+            source=row["source"],
+            observed_at=row["observed_at"],
+            status=FlagStatus(row["status"]),
+            fingerprint=row["fingerprint"],
+            flag_preview=row["flag_preview"],
+            notes=row["notes"],
+            evidence_id=row["evidence_id"],
+            workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
         )
 
     def update_flag_status(
@@ -757,7 +964,11 @@ class OperationService:
         return cur.rowcount > 0
 
     def list_flags(
-        self, round_id: int | None = None, target_id: str | None = None, limit: int = 100
+        self,
+        round_id: int | None = None,
+        target_id: str | None = None,
+        workflow_id: str | None = None,
+        limit: int = 100,
     ) -> list[FlagRecord]:
         query = "SELECT * FROM flag_records WHERE 1=1"
         params: list = []
@@ -767,6 +978,9 @@ class OperationService:
         if target_id is not None:
             query += " AND target_id = ?"
             params.append(target_id)
+        if workflow_id is not None:
+            query += " AND workflow_id = ?"
+            params.append(workflow_id)
         query += " ORDER BY observed_at DESC LIMIT ?"
         params.append(limit)
 
@@ -784,6 +998,7 @@ class OperationService:
                 flag_preview=r["flag_preview"],
                 notes=r["notes"],
                 evidence_id=r["evidence_id"],
+                workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
             )
             for r in rows
         ]
@@ -800,18 +1015,28 @@ class OperationService:
         latency_ms: float | None = None,
         source: str = "local",
         details: dict | None = None,
+        workflow_id: str | None = None,
         observed_at: float | None = None,
     ) -> SlaObservation:
         self._validate_target(target_id)
+        if workflow_id:
+            wf = self.get_workflow(workflow_id)
+            if not wf:
+                raise ValueError(f"Workflow not found: {workflow_id}")
+            rnd = self.get_round(round_id)
+            if rnd and rnd.session_id != wf.session_id:
+                raise ValueError(
+                    f"Cross-session attachment rejected: SLA round belongs to session {rnd.session_id}, workflow to {wf.session_id}"
+                )
         sla_id = str(uuid.uuid4())
         ts = observed_at or time.time()
         details_json = json.dumps(details or {}, sort_keys=True)
         with self._db() as db:
             db.execute(
                 """INSERT INTO sla_observations(
-                    id, round_id, target_id, service, observed_at, status, latency_ms, source, details
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (sla_id, round_id, target_id, service, ts, status.value, latency_ms, source, details_json),
+                    id, round_id, target_id, service, observed_at, status, latency_ms, source, details, workflow_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (sla_id, round_id, target_id, service, ts, status.value, latency_ms, source, details_json, workflow_id),
             )
         return SlaObservation(
             id=sla_id,
@@ -823,10 +1048,34 @@ class OperationService:
             latency_ms=latency_ms,
             source=source,
             details=details or {},
+            workflow_id=workflow_id,
+        )
+
+    def get_sla(self, sla_id: str) -> SlaObservation | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM sla_observations WHERE id = ?", (sla_id,)).fetchone()
+        if not row:
+            return None
+        keys = row.keys()
+        return SlaObservation(
+            id=row["id"],
+            round_id=row["round_id"],
+            target_id=row["target_id"],
+            service=row["service"],
+            observed_at=row["observed_at"],
+            status=SlaStatus(row["status"]),
+            latency_ms=row["latency_ms"],
+            source=row["source"],
+            details=json.loads(row["details"]),
+            workflow_id=row["workflow_id"] if "workflow_id" in keys else None,
         )
 
     def list_sla(
-        self, round_id: int | None = None, target_id: str | None = None, limit: int = 100
+        self,
+        round_id: int | None = None,
+        target_id: str | None = None,
+        workflow_id: str | None = None,
+        limit: int = 100,
     ) -> list[SlaObservation]:
         query = "SELECT * FROM sla_observations WHERE 1=1"
         params: list = []
@@ -836,6 +1085,9 @@ class OperationService:
         if target_id is not None:
             query += " AND target_id = ?"
             params.append(target_id)
+        if workflow_id is not None:
+            query += " AND workflow_id = ?"
+            params.append(workflow_id)
         query += " ORDER BY observed_at DESC LIMIT ?"
         params.append(limit)
 
@@ -852,21 +1104,249 @@ class OperationService:
                 latency_ms=r["latency_ms"],
                 source=r["source"],
                 details=json.loads(r["details"]),
+                workflow_id=r["workflow_id"] if "workflow_id" in r.keys() else None,
             )
             for r in rows
         ]
 
+    # --- WORKFLOWS ---
+
+    def create_workflow(
+        self,
+        session_id: str,
+        round_id: int,
+        title: str,
+        objective: str = "",
+        target_id: str | None = None,
+        notes: str = "",
+        started_at: float | None = None,
+    ) -> WorkflowRun:
+        session = self.get_session(session_id)
+        if not session:
+            raise ValueError(f"Session not found: {session_id}")
+        rnd = self.get_round(round_id)
+        if not rnd:
+            raise ValueError(f"Round not found: {round_id}")
+        if rnd.session_id != session_id:
+            raise ValueError(f"Round {round_id} belongs to session {rnd.session_id}, not {session_id}")
+        self._validate_target(target_id)
+
+        workflow_id = str(uuid.uuid4())
+        started = started_at or time.time()
+        with self._db() as db:
+            db.execute(
+                """INSERT INTO operational_workflows(
+                    workflow_id, session_id, round_id, title, objective, target_id, started_at, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    workflow_id,
+                    session_id,
+                    round_id,
+                    title,
+                    objective,
+                    target_id,
+                    started,
+                    WorkflowStatus.ACTIVE.value,
+                    notes,
+                ),
+            )
+        return WorkflowRun(
+            workflow_id=workflow_id,
+            session_id=session_id,
+            round_id=round_id,
+            title=title,
+            objective=objective,
+            target_id=target_id,
+            started_at=started,
+            status=WorkflowStatus.ACTIVE,
+            notes=notes,
+        )
+
+    def get_workflow(self, workflow_id: str) -> WorkflowRun | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM operational_workflows WHERE workflow_id = ?", (workflow_id,)).fetchone()
+        if not row:
+            return None
+        return WorkflowRun(
+            workflow_id=row["workflow_id"],
+            session_id=row["session_id"],
+            round_id=row["round_id"],
+            title=row["title"],
+            objective=row["objective"],
+            target_id=row["target_id"],
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            status=WorkflowStatus(row["status"]),
+            notes=row["notes"],
+        )
+
+    def list_workflows(
+        self,
+        session_id: str | None = None,
+        round_id: int | None = None,
+        status: WorkflowStatus | None = None,
+        target_id: str | None = None,
+        limit: int = 100,
+    ) -> list[WorkflowRun]:
+        query = "SELECT * FROM operational_workflows WHERE 1=1"
+        params: list = []
+        if session_id:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        if round_id is not None:
+            query += " AND round_id = ?"
+            params.append(round_id)
+        if status is not None:
+            query += " AND status = ?"
+            params.append(status.value)
+        if target_id:
+            query += " AND target_id = ?"
+            params.append(target_id)
+        query += " ORDER BY started_at DESC LIMIT ?"
+        params.append(limit)
+
+        with self._db() as db:
+            rows = db.execute(query, params).fetchall()
+        return [
+            WorkflowRun(
+                workflow_id=r["workflow_id"],
+                session_id=r["session_id"],
+                round_id=r["round_id"],
+                title=r["title"],
+                objective=r["objective"],
+                target_id=r["target_id"],
+                started_at=r["started_at"],
+                completed_at=r["completed_at"],
+                status=WorkflowStatus(r["status"]),
+                notes=r["notes"],
+            )
+            for r in rows
+        ]
+
+    def complete_workflow(self, workflow_id: str, notes: str | None = None) -> bool:
+        now = time.time()
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow not found: {workflow_id}")
+        if wf.status != WorkflowStatus.ACTIVE:
+            raise ValueError(f"Cannot complete workflow in state {wf.status.value}")
+        new_notes = notes if notes is not None else wf.notes
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE operational_workflows SET status = ?, completed_at = ?, notes = ? WHERE workflow_id = ?",
+                (WorkflowStatus.COMPLETED.value, now, new_notes, workflow_id),
+            )
+        return cur.rowcount > 0
+
+    def abort_workflow(self, workflow_id: str, notes: str | None = None) -> bool:
+        now = time.time()
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow not found: {workflow_id}")
+        if wf.status != WorkflowStatus.ACTIVE:
+            raise ValueError(f"Cannot abort workflow in state {wf.status.value}")
+        new_notes = notes if notes is not None else wf.notes
+        with self._db() as db:
+            cur = db.execute(
+                "UPDATE operational_workflows SET status = ?, completed_at = ?, notes = ? WHERE workflow_id = ?",
+                (WorkflowStatus.ABORTED.value, now, new_notes, workflow_id),
+            )
+        return cur.rowcount > 0
+
+    def attach_action_to_workflow(self, action_id: str, workflow_id: str) -> bool:
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow not found: {workflow_id}")
+        action = self.get_action(action_id)
+        if not action:
+            raise ValueError(f"Action not found: {action_id}")
+        if action.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: action belongs to session {action.session_id}, workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute("UPDATE operator_actions SET workflow_id = ? WHERE id = ?", (workflow_id, action_id))
+        return cur.rowcount > 0
+
+    def attach_attack_to_workflow(self, attack_id: str, workflow_id: str) -> bool:
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow not found: {workflow_id}")
+        atk = self.get_attack(attack_id)
+        if not atk:
+            raise ValueError(f"Attack not found: {attack_id}")
+        rnd = self.get_round(atk.round_id)
+        if rnd and rnd.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: attack round belongs to session {rnd.session_id}, workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute("UPDATE attack_records SET workflow_id = ? WHERE id = ?", (workflow_id, attack_id))
+        return cur.rowcount > 0
+
+    def attach_defense_to_workflow(self, defense_id: str, workflow_id: str) -> bool:
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow not found: {workflow_id}")
+        df = self.get_defense(defense_id)
+        if not df:
+            raise ValueError(f"Defense not found: {defense_id}")
+        rnd = self.get_round(df.round_id)
+        if rnd and rnd.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: defense round belongs to session {rnd.session_id}, workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute("UPDATE defense_records SET workflow_id = ? WHERE id = ?", (workflow_id, defense_id))
+        return cur.rowcount > 0
+
+    def attach_flag_to_workflow(self, flag_id: str, workflow_id: str) -> bool:
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow not found: {workflow_id}")
+        flg = self.get_flag(flag_id)
+        if not flg:
+            raise ValueError(f"Flag record not found: {flag_id}")
+        rnd = self.get_round(flg.round_id)
+        if rnd and rnd.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: flag round belongs to session {rnd.session_id}, workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute("UPDATE flag_records SET workflow_id = ? WHERE id = ?", (workflow_id, flag_id))
+        return cur.rowcount > 0
+
+    def attach_sla_to_workflow(self, sla_id: str, workflow_id: str) -> bool:
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow not found: {workflow_id}")
+        sla = self.get_sla(sla_id)
+        if not sla:
+            raise ValueError(f"SLA observation not found: {sla_id}")
+        rnd = self.get_round(sla.round_id)
+        if rnd and rnd.session_id != wf.session_id:
+            raise ValueError(
+                f"Cross-session attachment rejected: SLA round belongs to session {rnd.session_id}, workflow to {wf.session_id}"
+            )
+        with self._db() as db:
+            cur = db.execute("UPDATE sla_observations SET workflow_id = ? WHERE id = ?", (workflow_id, sla_id))
+        return cur.rowcount > 0
+
     # --- CHRONOLOGICAL TIMELINE ---
 
     def get_timeline(
-        self, round_id: int | None = None, target_id: str | None = None, limit: int = 50
+        self,
+        round_id: int | None = None,
+        target_id: str | None = None,
+        workflow_id: str | None = None,
+        limit: int = 50,
     ) -> list[TimelineEntry]:
         """Aggregate actions, attacks, defenses, flags, and SLA observations
         into a unified chronological timeline (descending by timestamp).
         """
         entries: list[TimelineEntry] = []
 
-        actions = self.list_actions(round_id=round_id, target_id=target_id, limit=limit)
+        actions = self.list_actions(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
         for a in actions:
             entries.append(
                 TimelineEntry(
@@ -878,10 +1358,11 @@ class OperationService:
                     title=f"{a.tool} {a.operation}: {a.summary}" if a.tool else a.summary,
                     status=a.status.upper(),
                     details=f"Tool: {a.tool}" if a.tool else "",
+                    workflow_id=a.workflow_id,
                 )
             )
 
-        attacks = self.list_attacks(round_id=round_id, target_id=target_id, limit=limit)
+        attacks = self.list_attacks(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
         for atk in attacks:
             entries.append(
                 TimelineEntry(
@@ -893,10 +1374,11 @@ class OperationService:
                     title=f"{atk.service} via {atk.method}",
                     status=atk.status.value.upper(),
                     details=atk.notes,
+                    workflow_id=atk.workflow_id,
                 )
             )
 
-        defenses = self.list_defenses(round_id=round_id, target_id=target_id, limit=limit)
+        defenses = self.list_defenses(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
         for df in defenses:
             entries.append(
                 TimelineEntry(
@@ -908,10 +1390,11 @@ class OperationService:
                     title=f"{df.service}: {df.action}",
                     status=df.status.value.upper(),
                     details=df.notes,
+                    workflow_id=df.workflow_id,
                 )
             )
 
-        flags = self.list_flags(round_id=round_id, target_id=target_id, limit=limit)
+        flags = self.list_flags(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
         for flg in flags:
             entries.append(
                 TimelineEntry(
@@ -923,10 +1406,11 @@ class OperationService:
                     title=f"Flag {flg.flag_preview} via {flg.source}",
                     status=flg.status.value.upper(),
                     details=flg.fingerprint,
+                    workflow_id=flg.workflow_id,
                 )
             )
 
-        sla_obs = self.list_sla(round_id=round_id, target_id=target_id, limit=limit)
+        sla_obs = self.list_sla(round_id=round_id, target_id=target_id, workflow_id=workflow_id, limit=limit)
         for s in sla_obs:
             lat_str = f"{s.latency_ms:.0f}ms" if s.latency_ms is not None else ""
             entries.append(
@@ -939,9 +1423,23 @@ class OperationService:
                     title=f"{s.service} ({s.source}) {lat_str}".strip(),
                     status=s.status.value.upper(),
                     details=f"Source: {s.source}",
+                    workflow_id=s.workflow_id,
                 )
             )
 
         # Deterministic sorting: newest timestamp first, then category, then item_id
         entries.sort(key=lambda x: (x.timestamp, x.category, x.item_id), reverse=True)
         return entries[:limit]
+
+    def get_workflow_timeline(self, workflow_id: str, limit: int = 100) -> list[TimelineEntry]:
+        """Aggregate all records associated with a workflow into a chronological
+        story timeline (ascending by timestamp: earliest to latest).
+        """
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow not found: {workflow_id}")
+
+        entries = self.get_timeline(workflow_id=workflow_id, limit=limit)
+        # Sort ascending for workflow progression: earliest to latest
+        entries.sort(key=lambda x: (x.timestamp, x.category, x.item_id))
+        return entries

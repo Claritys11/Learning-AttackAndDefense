@@ -15,6 +15,8 @@ from .models import (
     SlaStatus,
     Tick,
     TimelineEntry,
+    WorkflowRun,
+    WorkflowStatus,
     make_flag_fingerprint,
 )
 from .service import OperationService
@@ -36,6 +38,8 @@ __all__ = [
     "SlaStatus",
     "Tick",
     "TimelineEntry",
+    "WorkflowRun",
+    "WorkflowStatus",
     "make_flag_fingerprint",
     "OperationService",
 ]

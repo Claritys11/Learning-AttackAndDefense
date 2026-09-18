@@ -166,6 +166,9 @@ def build_parser() -> argparse.ArgumentParser:
     pact.add_argument("--summary", default="", help="action summary")
     pact.add_argument("--status", default="completed")
     pact.add_argument("--round", type=int, default=None)
+    pact.add_argument("--workflow", default=None, help="workflow ID to associate action with")
+    pact.add_argument("--parent", "--parent-action", dest="parent_action_id", default=None, help="parent action ID (e.g. for defense verification)")
+    pact.add_argument("--tool-exec", dest="tool_execution_id", default=None, help="tool execution ID")
     pact.add_argument("--list", action="store_true")
     pact.add_argument("--json", action="store_true")
 
@@ -176,6 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
     patk.add_argument("--method", default="", help="attack / exploit method")
     patk.add_argument("--status", choices=["planned", "in_progress", "success", "failed", "aborted"], default="planned")
     patk.add_argument("--notes", default="")
+    patk.add_argument("--workflow", default=None, help="workflow ID to associate attack with")
     patk.add_argument("--update", dest="update_id", default=None, help="attack ID to update")
     patk.add_argument("--round", type=int, default=None)
     patk.add_argument("--list", action="store_true")
@@ -188,6 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
     pdf.add_argument("--action", dest="defense_action", default="", help="remediation action")
     pdf.add_argument("--status", choices=["planned", "in_progress", "completed", "failed", "reverted"], default="planned")
     pdf.add_argument("--notes", default="")
+    pdf.add_argument("--workflow", default=None, help="workflow ID to associate defense with")
     pdf.add_argument("--update", dest="update_id", default=None, help="defense ID to update")
     pdf.add_argument("--round", type=int, default=None)
     pdf.add_argument("--list", action="store_true")
@@ -199,6 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     pfl.add_argument("--source", default="manual", help="flag source")
     pfl.add_argument("--status", choices=["observed", "validated", "submitted", "rejected", "expired"], default="observed")
     pfl.add_argument("--notes", default="")
+    pfl.add_argument("--workflow", default=None, help="workflow ID to associate flag with")
     pfl.add_argument("--update", dest="update_id", default=None, help="flag ID to update")
     pfl.add_argument("--round", type=int, default=None)
     pfl.add_argument("--list", action="store_true")
@@ -211,6 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     psla.add_argument("--status", choices=["ok", "mumble", "offline", "unknown"], default="ok")
     psla.add_argument("--latency", type=float, default=None, help="observed latency in ms")
     psla.add_argument("--source", default="local")
+    psla.add_argument("--workflow", default=None, help="workflow ID to associate SLA observation with")
     psla.add_argument("--round", type=int, default=None)
     psla.add_argument("--list", action="store_true")
     psla.add_argument("--json", action="store_true")
@@ -218,8 +225,24 @@ def build_parser() -> argparse.ArgumentParser:
     ptl = sub.add_parser("timeline", help="display chronological activity timeline")
     ptl.add_argument("--round", type=int, default=None)
     ptl.add_argument("--target", default=None)
+    ptl.add_argument("--workflow", default=None, help="filter timeline by workflow ID")
     ptl.add_argument("--limit", type=int, default=50)
     ptl.add_argument("--json", action="store_true")
+
+    pwf = sub.add_parser("workflow", help="create, manage, or list operator workflows")
+    pwf.add_argument("--create", action="store_true", help="create a new workflow")
+    pwf.add_argument("--title", default="", help="workflow title")
+    pwf.add_argument("--objective", default="", help="workflow objective")
+    pwf.add_argument("--target", default=None, help="target ID (optional)")
+    pwf.add_argument("--notes", default="", help="workflow notes")
+    pwf.add_argument("--round", type=int, default=None, help="round number")
+    pwf.add_argument("--list", action="store_true", help="list workflows")
+    pwf.add_argument("--status", choices=["active", "completed", "aborted"], default=None, help="filter by status")
+    pwf.add_argument("--show", default=None, help="workflow ID to show")
+    pwf.add_argument("--complete", default=None, help="workflow ID to complete")
+    pwf.add_argument("--abort", default=None, help="workflow ID to abort")
+    pwf.add_argument("--timeline", default=None, help="show timeline for workflow ID")
+    pwf.add_argument("--json", action="store_true")
 
     return p
 
@@ -524,20 +547,36 @@ def main(argv=None) -> int:
         if args.record:
             cat = ActionCategory(args.category)
             act = ops.record_action(
-                sid, cur_rnd, cat, args.tool, args.op, args.summary, target_id=args.target, status=args.status
+                sid,
+                cur_rnd,
+                cat,
+                args.tool,
+                args.op,
+                args.summary,
+                target_id=args.target,
+                status=args.status,
+                workflow_id=getattr(args, "workflow", None),
+                parent_action_id=getattr(args, "parent_action_id", None),
+                tool_execution_id=getattr(args, "tool_execution_id", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps(act.__dict__, default=str, indent=2))
             else:
-                print(f"Action [{act.category.value.upper()}] recorded: {act.summary} (ID: {act.id[:8]})")
+                wf_str = f" [WF: {act.workflow_id[:8]}]" if act.workflow_id else ""
+                print(f"Action [{act.category.value.upper()}]{wf_str} recorded: {act.summary} (ID: {act.id[:8]})")
             return 0
         else:
-            actions = ops.list_actions(round_id=args.round, target_id=args.target)
+            actions = ops.list_actions(
+                round_id=args.round,
+                target_id=args.target,
+                workflow_id=getattr(args, "workflow", None),
+            )
             if getattr(args, "json", False):
                 print(json.dumps([a.__dict__ for a in actions], default=str, indent=2))
             else:
                 for a in actions:
-                    print(f"[{a.category.value.upper():<12}]\t{a.target_id or '-'}\t{a.summary}\t({a.status})")
+                    wf_str = f" [WF:{a.workflow_id[:8]}]" if a.workflow_id else ""
+                    print(f"[{a.category.value.upper():<12}]\t{a.target_id or '-'}\t{a.summary}{wf_str}\t({a.status})")
             return 0
 
     if args.command == "attack":
@@ -550,11 +589,20 @@ def main(argv=None) -> int:
             if not args.target:
                 raise SystemExit("attack --record requires --target <target_id>")
             st = AttackStatus(args.status)
-            atk = ops.record_attack(cur_rnd, args.target, args.service, args.method, status=st, notes=args.notes)
+            atk = ops.record_attack(
+                cur_rnd,
+                args.target,
+                args.service,
+                args.method,
+                status=st,
+                notes=args.notes,
+                workflow_id=getattr(args, "workflow", None),
+            )
             if getattr(args, "json", False):
                 print(json.dumps(atk.__dict__, default=str, indent=2))
             else:
-                print(f"Attack [{atk.id[:8]}] recorded against {atk.target_id} ({atk.status.value})")
+                wf_str = f" [WF: {atk.workflow_id[:8]}]" if atk.workflow_id else ""
+                print(f"Attack [{atk.id[:8]}]{wf_str} recorded against {atk.target_id} ({atk.status.value})")
             return 0
         elif args.update_id:
             st = AttackStatus(args.status)
@@ -565,12 +613,17 @@ def main(argv=None) -> int:
                 print(f"Attack [{args.update_id[:8]}] updated to {st.value}: {ok}")
             return 0
         else:
-            attacks = ops.list_attacks(round_id=args.round, target_id=args.target)
+            attacks = ops.list_attacks(
+                round_id=args.round,
+                target_id=args.target,
+                workflow_id=getattr(args, "workflow", None),
+            )
             if getattr(args, "json", False):
                 print(json.dumps([a.__dict__ for a in attacks], default=str, indent=2))
             else:
                 for a in attacks:
-                    print(f"[{a.id[:8]}]\t{a.target_id}\t{a.service}\t{a.status.value}\t{a.method}")
+                    wf_str = f" [WF:{a.workflow_id[:8]}]" if a.workflow_id else ""
+                    print(f"[{a.id[:8]}]\t{a.target_id}\t{a.service}\t{a.status.value}\t{a.method}{wf_str}")
             return 0
 
     if args.command == "defense":
@@ -583,11 +636,20 @@ def main(argv=None) -> int:
             if not args.target:
                 raise SystemExit("defense --record requires --target <target_id>")
             st = DefenseStatus(args.status)
-            df = ops.record_defense(cur_rnd, args.target, args.service, args.defense_action, status=st, notes=args.notes)
+            df = ops.record_defense(
+                cur_rnd,
+                args.target,
+                args.service,
+                args.defense_action,
+                status=st,
+                notes=args.notes,
+                workflow_id=getattr(args, "workflow", None),
+            )
             if getattr(args, "json", False):
                 print(json.dumps(df.__dict__, default=str, indent=2))
             else:
-                print(f"Defense [{df.id[:8]}] recorded for {df.target_id} ({df.status.value})")
+                wf_str = f" [WF: {df.workflow_id[:8]}]" if df.workflow_id else ""
+                print(f"Defense [{df.id[:8]}]{wf_str} recorded for {df.target_id} ({df.status.value})")
             return 0
         elif args.update_id:
             st = DefenseStatus(args.status)
@@ -598,12 +660,17 @@ def main(argv=None) -> int:
                 print(f"Defense [{args.update_id[:8]}] updated to {st.value}: {ok}")
             return 0
         else:
-            defenses = ops.list_defenses(round_id=args.round, target_id=args.target)
+            defenses = ops.list_defenses(
+                round_id=args.round,
+                target_id=args.target,
+                workflow_id=getattr(args, "workflow", None),
+            )
             if getattr(args, "json", False):
                 print(json.dumps([d.__dict__ for d in defenses], default=str, indent=2))
             else:
                 for d in defenses:
-                    print(f"[{d.id[:8]}]\t{d.target_id}\t{d.service}\t{d.status.value}\t{d.action}")
+                    wf_str = f" [WF:{d.workflow_id[:8]}]" if d.workflow_id else ""
+                    print(f"[{d.id[:8]}]\t{d.target_id}\t{d.service}\t{d.status.value}\t{d.action}{wf_str}")
             return 0
 
     if args.command == "flag":
@@ -616,11 +683,20 @@ def main(argv=None) -> int:
             if not args.target:
                 raise SystemExit("flag --record requires --target <target_id>")
             st = FlagStatus(args.status)
-            fl = ops.record_flag(cur_rnd, args.target, args.source, args.raw_flag, status=st, notes=args.notes)
+            fl = ops.record_flag(
+                cur_rnd,
+                args.target,
+                args.source,
+                args.raw_flag,
+                status=st,
+                notes=args.notes,
+                workflow_id=getattr(args, "workflow", None),
+            )
             if getattr(args, "json", False):
                 print(json.dumps(fl.__dict__, default=str, indent=2))
             else:
-                print(f"Flag [{fl.id[:8]}] recorded: {fl.flag_preview} (status: {fl.status.value})")
+                wf_str = f" [WF: {fl.workflow_id[:8]}]" if fl.workflow_id else ""
+                print(f"Flag [{fl.id[:8]}]{wf_str} recorded: {fl.flag_preview} (status: {fl.status.value})")
             return 0
         elif args.update_id:
             st = FlagStatus(args.status)
@@ -631,12 +707,17 @@ def main(argv=None) -> int:
                 print(f"Flag [{args.update_id[:8]}] updated to {st.value}: {ok}")
             return 0
         else:
-            flags = ops.list_flags(round_id=args.round, target_id=args.target)
+            flags = ops.list_flags(
+                round_id=args.round,
+                target_id=args.target,
+                workflow_id=getattr(args, "workflow", None),
+            )
             if getattr(args, "json", False):
                 print(json.dumps([f.__dict__ for f in flags], default=str, indent=2))
             else:
                 for f in flags:
-                    print(f"[{f.id[:8]}]\t{f.target_id}\t{f.flag_preview}\t{f.status.value}\t{f.source}")
+                    wf_str = f" [WF:{f.workflow_id[:8]}]" if f.workflow_id else ""
+                    print(f"[{f.id[:8]}]\t{f.target_id}\t{f.flag_preview}\t{f.status.value}\t{f.source}{wf_str}")
             return 0
 
     if args.command == "sla":
@@ -649,27 +730,63 @@ def main(argv=None) -> int:
             if not args.target:
                 raise SystemExit("sla --record requires --target <target_id>")
             st = SlaStatus(args.status)
-            sla_rec = ops.record_sla(cur_rnd, args.target, args.service, st, latency_ms=args.latency, source=args.source)
+            sla_rec = ops.record_sla(
+                cur_rnd,
+                args.target,
+                args.service,
+                st,
+                latency_ms=args.latency,
+                source=args.source,
+                workflow_id=getattr(args, "workflow", None),
+            )
             if getattr(args, "json", False):
                 print(json.dumps(sla_rec.__dict__, default=str, indent=2))
             else:
                 lat = f"{sla_rec.latency_ms:.0f}ms" if sla_rec.latency_ms is not None else "n/a"
-                print(f"SLA recorded: {sla_rec.target_id} {sla_rec.service} -> {sla_rec.status.value} ({lat})")
+                wf_str = f" [WF: {sla_rec.workflow_id[:8]}]" if sla_rec.workflow_id else ""
+                print(f"SLA recorded{wf_str}: {sla_rec.target_id} {sla_rec.service} -> {sla_rec.status.value} ({lat})")
             return 0
         else:
-            sla_list = ops.list_sla(round_id=args.round, target_id=args.target)
+            sla_list = ops.list_sla(
+                round_id=args.round,
+                target_id=args.target,
+                workflow_id=getattr(args, "workflow", None),
+            )
             if getattr(args, "json", False):
                 print(json.dumps([s.__dict__ for s in sla_list], default=str, indent=2))
             else:
                 for s in sla_list:
                     lat = f"{s.latency_ms:.0f}ms" if s.latency_ms is not None else "n/a"
-                    print(f"{s.target_id}\t{s.service}\t{s.status.value}\t{lat}\t({s.source})")
+                    wf_str = f" [WF:{s.workflow_id[:8]}]" if s.workflow_id else ""
+                    print(f"{s.target_id}\t{s.service}\t{s.status.value}\t{lat}\t({s.source}){wf_str}")
             return 0
 
     if args.command == "timeline":
         from .operations import OperationService
         from .targets import TargetService
         ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        wf_id = getattr(args, "workflow", None)
+        if wf_id:
+            wf = ops.get_workflow(wf_id)
+            if not wf:
+                raise SystemExit(f"Workflow not found: {wf_id}")
+            entries = ops.get_workflow_timeline(wf_id, limit=args.limit)
+            if getattr(args, "json", False):
+                print(json.dumps([e.__dict__ for e in entries], default=str, indent=2))
+            else:
+                print(f"WORKFLOW #{wf.workflow_id[:8]}")
+                print(f"{wf.title}")
+                print(f"Status: {wf.status.value.upper()}")
+                print()
+                if not entries:
+                    print("(no activity recorded for this workflow)")
+                else:
+                    print(f"{'TIME':<10}\t{'CATEGORY':<14}\t{'EVENT'}")
+                    for e in entries:
+                        t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+                        print(f"{t_str:<10}\t{e.category:<14}\t{e.title}")
+            return 0
+
         entries = ops.get_timeline(round_id=args.round, target_id=args.target, limit=args.limit)
         if getattr(args, "json", False):
             print(json.dumps([e.__dict__ for e in entries], default=str, indent=2))
@@ -682,6 +799,99 @@ def main(argv=None) -> int:
                     tgt = f"{e.target_id:<14}" if e.target_id else " " * 14
                     print(f"{t_str}\t{e.category:<12}\t{tgt}\t{e.title}\t[{e.status}]")
         return 0
+
+    if args.command == "workflow":
+        from .operations import OperationService, WorkflowStatus
+        from .targets import TargetService
+        ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        ctx = ContextStore(args.state_db).load()
+        sid = ctx.session_id if ctx else "default-session"
+        cur_rnd = args.round if args.round is not None else (ctx.current_round if ctx else 1)
+
+        if args.create:
+            if not args.title:
+                raise SystemExit("workflow --create requires --title <title>")
+            wf = ops.create_workflow(
+                session_id=sid,
+                round_id=cur_rnd,
+                title=args.title,
+                objective=args.objective or "",
+                target_id=args.target,
+                notes=args.notes or "",
+            )
+            if getattr(args, "json", False):
+                print(json.dumps(wf.__dict__, default=str, indent=2))
+            else:
+                print(f"Workflow [{wf.workflow_id[:8]}] created: {wf.title} (Status: {wf.status.value})")
+            return 0
+
+        elif args.show:
+            wf = ops.get_workflow(args.show)
+            if not wf:
+                raise SystemExit(f"Workflow not found: {args.show}")
+            if getattr(args, "json", False):
+                print(json.dumps(wf.__dict__, default=str, indent=2))
+            else:
+                print(f"WORKFLOW #{wf.workflow_id[:8]}")
+                print(f"Title:     {wf.title}")
+                print(f"Objective: {wf.objective or '-'}")
+                print(f"Target:    {wf.target_id or '-'}")
+                print(f"Status:    {wf.status.value.upper()}")
+                print(f"Round:     #{wf.round_id}")
+                if wf.notes:
+                    print(f"Notes:     {wf.notes}")
+            return 0
+
+        elif args.complete:
+            ok = ops.complete_workflow(args.complete, notes=args.notes or None)
+            if getattr(args, "json", False):
+                print(json.dumps({"workflow_id": args.complete, "completed": ok, "status": "completed"}))
+            else:
+                print(f"Workflow [{args.complete[:8]}] completed: {ok}")
+            return 0
+
+        elif args.abort:
+            ok = ops.abort_workflow(args.abort, notes=args.notes or None)
+            if getattr(args, "json", False):
+                print(json.dumps({"workflow_id": args.abort, "aborted": ok, "status": "aborted"}))
+            else:
+                print(f"Workflow [{args.abort[:8]}] aborted: {ok}")
+            return 0
+
+        elif args.timeline:
+            wf = ops.get_workflow(args.timeline)
+            if not wf:
+                raise SystemExit(f"Workflow not found: {args.timeline}")
+            entries = ops.get_workflow_timeline(args.timeline)
+            if getattr(args, "json", False):
+                print(json.dumps([e.__dict__ for e in entries], default=str, indent=2))
+            else:
+                print(f"WORKFLOW #{wf.workflow_id[:8]}")
+                print(f"{wf.title}")
+                print(f"Status: {wf.status.value.upper()}")
+                print()
+                if not entries:
+                    print("(no activity recorded for this workflow)")
+                else:
+                    print(f"{'TIME':<10}\t{'CATEGORY':<14}\t{'EVENT'}")
+                    for e in entries:
+                        t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+                        print(f"{t_str:<10}\t{e.category:<14}\t{e.title}")
+            return 0
+
+        else:
+            st = WorkflowStatus(args.status) if args.status else None
+            workflows = ops.list_workflows(round_id=args.round, status=st, target_id=args.target)
+            if getattr(args, "json", False):
+                print(json.dumps([w.__dict__ for w in workflows], default=str, indent=2))
+            else:
+                if not workflows:
+                    print("(no workflows found)")
+                else:
+                    for w in workflows:
+                        tgt = f"[{w.target_id}]" if w.target_id else ""
+                        print(f"[{w.workflow_id[:8]}]\t{w.status.value.upper():<10}\tR#{w.round_id}\t{tgt}\t{w.title}")
+            return 0
 
     return 1
 

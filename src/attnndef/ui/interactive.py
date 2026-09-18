@@ -22,6 +22,8 @@ from ..operations import (
     RoundStatus,
     SlaObservation,
     SlaStatus,
+    WorkflowRun,
+    WorkflowStatus,
 )
 from ..targets import Role, Scope, Target, TargetService, diff_history, compare_observations
 from ..tools import (
@@ -302,6 +304,25 @@ class InteractiveConsole:
                 sum_str = self._ask("Action Summary", summary or f"{tool} {operation}")
                 session_id = self.context.session_id if self.context else ""
                 round_id = self.context.current_round if self.context else 0
+
+                wf_id = None
+                wf_choice = self._ask("Attach to workflow? [y/N]", "N").lower()
+                if wf_choice in ("y", "yes"):
+                    active_wfs = self.operation_service.list_workflows(status=WorkflowStatus.ACTIVE)
+                    if active_wfs:
+                        self.output("Active workflows:")
+                        for w in active_wfs:
+                            self.output(f"  [{w.workflow_id[:8]}] {w.title}")
+                    wf_input = self._ask("Workflow ID (or prefix)", "").strip()
+                    if wf_input:
+                        matched = [w for w in active_wfs if w.workflow_id.startswith(wf_input)]
+                        wf_id = matched[0].workflow_id if matched else wf_input
+
+                parent_act_id = None
+                if category == ActionCategory.VERIFICATION:
+                    p_input = self._ask("Parent Action ID (optional, for verification linking)", "").strip()
+                    parent_act_id = p_input or None
+
                 act = self.operation_service.record_action(
                     session_id=session_id,
                     round_id=round_id,
@@ -312,9 +333,13 @@ class InteractiveConsole:
                     target_id=self.context.selected_target if self.context else None,
                     status="completed" if success else "failed",
                     evidence_id=ev_id,
+                    workflow_id=wf_id,
+                    parent_action_id=parent_act_id,
+                    tool_execution_id=record.id,
                     details={"parameters": parameters, "duration_s": duration_s},
                 )
-                self.output(f"✓ Operator Action recorded: [{act.category.value.upper()}] {act.summary}")
+                wf_str = f" [WF: {act.workflow_id[:8]}]" if act.workflow_id else ""
+                self.output(f"✓ Operator Action recorded: [{act.category.value.upper()}]{wf_str} {act.summary}")
 
     def _resolve_target_and_scope(self, default_host: str = "") -> tuple[bool, Target | None, str]:
         target: Target | None = None
@@ -952,7 +977,8 @@ class InteractiveConsole:
                 "  5. Flag State\n"
                 "  6. SLA / Health Observations\n"
                 "  7. Activity Timeline\n"
-                "  8. Knowledge Base\n"
+                "  8. Workflows\n"
+                "  9. Knowledge Base\n"
                 "  0. Back"
             )
             choice = self._ask("Select", "0")
@@ -973,6 +999,8 @@ class InteractiveConsole:
             elif choice == "7":
                 self._ad_timeline()
             elif choice == "8":
+                self._ad_workflows()
+            elif choice == "9":
                 self._ad_knowledge()
             else:
                 self.output("Invalid selection.")
@@ -1038,8 +1066,10 @@ class InteractiveConsole:
             else:
                 for a in actions:
                     tgt = f" [{a.target_id}]" if a.target_id else ""
+                    wf_str = f" [WF: {a.workflow_id[:8]}]" if a.workflow_id else ""
+                    parent_str = f" [Parent: {a.parent_action_id[:8]}]" if a.parent_action_id else ""
                     t_str = time.strftime("%H:%M:%S", time.localtime(a.timestamp))
-                    self.output(f"  {t_str}  [{a.category.value.upper():<12}] {a.summary}{tgt} ({a.status})")
+                    self.output(f"  {t_str}  [{a.category.value.upper():<12}] {a.summary}{tgt}{wf_str}{parent_str} ({a.status})")
             self.output(
                 "\n  1. Record New Operator Action\n"
                 "  0. Back"
@@ -1063,12 +1093,41 @@ class InteractiveConsole:
                     self.output("Summary is required.")
                     continue
                 status = self._ask("Status", "completed")
+
+                wf_id = None
+                wf_choice = self._ask("Attach to workflow? [y/N]", "N").lower()
+                if wf_choice in ("y", "yes"):
+                    active_wfs = self.operation_service.list_workflows(status=WorkflowStatus.ACTIVE)
+                    if active_wfs:
+                        self.output("Active workflows:")
+                        for w in active_wfs:
+                            self.output(f"  [{w.workflow_id[:8]}] {w.title}")
+                    wf_input = self._ask("Workflow ID (or prefix)", "").strip()
+                    if wf_input:
+                        matched = [w for w in active_wfs if w.workflow_id.startswith(wf_input)]
+                        wf_id = matched[0].workflow_id if matched else wf_input
+
+                parent_act_id = None
+                if cat == ActionCategory.VERIFICATION:
+                    p_input = self._ask("Parent Action ID (optional, for verification linking)", "").strip()
+                    parent_act_id = p_input or None
+
                 sid = self.context.session_id if self.context else ""
                 try:
                     act = self.operation_service.record_action(
-                        sid, rnd, cat, tool, op, summary, target_id=tgt or None, status=status
+                        sid,
+                        rnd,
+                        cat,
+                        tool,
+                        op,
+                        summary,
+                        target_id=tgt or None,
+                        status=status,
+                        workflow_id=wf_id,
+                        parent_action_id=parent_act_id,
                     )
-                    self.output(f"✓ Action recorded: [{act.category.value.upper()}] {act.summary}")
+                    wf_str = f" [WF: {act.workflow_id[:8]}]" if act.workflow_id else ""
+                    self.output(f"✓ Action recorded: [{act.category.value.upper()}]{wf_str} {act.summary}")
                 except Exception as exc:
                     self.output(f"✗ Failed to record action: {exc}")
 
@@ -1322,6 +1381,190 @@ class InteractiveConsole:
                 self.output(f"  {t_str}  {entry.category:<12} {tgt} {entry.title:<30} {entry.status}")
         self.output("")
         self._ask("Press Enter to return", "")
+
+    def _ad_workflows(self):
+        while True:
+            self.output(
+                "\nOPERATOR WORKFLOWS\n"
+                "────────────────────────────\n"
+                "  1. List Workflows\n"
+                "  2. Start Workflow\n"
+                "  3. Open Workflow\n"
+                "  4. Complete Workflow\n"
+                "  5. Abort Workflow\n"
+                "  6. Workflow Timeline\n"
+                "  0. Back"
+            )
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            elif choice == "1":
+                self._list_workflows_ui()
+            elif choice == "2":
+                self._start_workflow_ui()
+            elif choice == "3":
+                self._open_workflow_ui()
+            elif choice == "4":
+                self._complete_workflow_ui()
+            elif choice == "5":
+                self._abort_workflow_ui()
+            elif choice == "6":
+                self._workflow_timeline_ui()
+            else:
+                self.output("Invalid selection.")
+
+    def _list_workflows_ui(self):
+        wfs = self.operation_service.list_workflows()
+        self.output("\nWORKFLOW LIST\n────────────────────────────")
+        if not wfs:
+            self.output("  (no workflows recorded)")
+        else:
+            for w in wfs:
+                tgt = f" [{w.target_id}]" if w.target_id else ""
+                t_str = time.strftime("%H:%M:%S", time.localtime(w.started_at))
+                self.output(f"  [{w.workflow_id[:8]}] {t_str}  {w.status.value.upper():<10} R#{w.round_id}{tgt}  {w.title}")
+        self.output("")
+        self._ask("Press Enter to continue", "")
+
+    def _start_workflow_ui(self):
+        title = self._ask("Workflow Title")
+        if not title:
+            self.output("Workflow title is required.")
+            return
+        objective = self._ask("Objective (optional)", "")
+        def_tgt = self.context.selected_target if self.context else ""
+        tgt = self._ask("Target ID (optional)", def_tgt)
+        notes = self._ask("Notes (optional)", "")
+        sid = self.context.session_id if self.context else "default-session"
+        cur_rnd = self.context.current_round if self.context else 1
+        try:
+            if not self.operation_service.get_session(sid):
+                self.operation_service.create_session(
+                    session_id=sid,
+                    operator=self.context.operator_name if self.context else "Operator",
+                    platform=self.context.platform if self.context else "jjz.jatimprov.go.id",
+                )
+            if not self.operation_service.get_round(cur_rnd):
+                self.operation_service.start_round(sid, cur_rnd)
+
+            wf = self.operation_service.create_workflow(
+                session_id=sid,
+                round_id=cur_rnd,
+                title=title,
+                objective=objective,
+                target_id=tgt or None,
+                notes=notes,
+            )
+            self.output(f"✓ Workflow started: [{wf.workflow_id[:8]}] {wf.title} (Status: {wf.status.value.upper()})")
+        except Exception as exc:
+            self.output(f"✗ Failed to start workflow: {exc}")
+
+    def _open_workflow_ui(self):
+        wf_id_input = self._ask("Workflow ID (or prefix)").strip()
+        if not wf_id_input:
+            return
+        wfs = self.operation_service.list_workflows()
+        matched = [w for w in wfs if w.workflow_id.startswith(wf_id_input)]
+        if not matched:
+            self.output(f"Workflow not found: {wf_id_input}")
+            return
+        wf = matched[0]
+        self.output(
+            f"\nWORKFLOW #{wf.workflow_id[:8]}\n"
+            "────────────────────────────\n"
+            f"  Title:        {wf.title}\n"
+            f"  Objective:    {wf.objective or '-'}\n"
+            f"  Target:       {wf.target_id or '-'}\n"
+            f"  Round:        Round #{wf.round_id}\n"
+            f"  Status:       {wf.status.value.upper()}\n"
+            f"  Started:      {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(wf.started_at))}\n"
+            f"  Completed:    {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(wf.completed_at)) if wf.completed_at else '-'}\n"
+            f"  Notes:        {wf.notes or '-'}"
+        )
+
+        # Intelligence Correlation (Target -> Current Intelligence -> Historical Observations -> Workflow Activity)
+        if wf.target_id and self.target_service:
+            tgt = self.target_service.get_target(wf.target_id)
+            if tgt:
+                self.output("\n  TARGET INTELLIGENCE CORRELATION:")
+                self.output(f"    Target:      {tgt.id} ({tgt.host}:{tgt.port}) Role: {tgt.role.value}")
+                obs_list = self.target_service.list_observations(tgt.id)
+                self.output(f"    Historical:  {len(obs_list)} observation(s)")
+                if obs_list:
+                    latest = obs_list[-1]
+                    t_str = time.strftime("%H:%M:%S", time.localtime(latest.observed_at))
+                    self.output(f"    Latest Obs:  {t_str} ({latest.source}) Status: {latest.status}")
+
+        # Workflow Activity
+        entries = self.operation_service.get_workflow_timeline(wf.workflow_id)
+        self.output(f"\n  CORRELATED WORKFLOW ACTIVITY ({len(entries)} events):")
+        if not entries:
+            self.output("    (no operational actions associated with this workflow)")
+        else:
+            for e in entries:
+                t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+                self.output(f"    {t_str}  [{e.category:<12}] {e.title} [{e.status}]")
+
+        self.output("")
+        self._ask("Press Enter to continue", "")
+
+    def _complete_workflow_ui(self):
+        wf_id_input = self._ask("Workflow ID (or prefix)").strip()
+        if not wf_id_input:
+            return
+        wfs = self.operation_service.list_workflows(status=WorkflowStatus.ACTIVE)
+        matched = [w for w in wfs if w.workflow_id.startswith(wf_id_input)]
+        if not matched:
+            self.output(f"Active workflow not found: {wf_id_input}")
+            return
+        wf = matched[0]
+        notes = self._ask("Closing notes (optional)", wf.notes)
+        try:
+            self.operation_service.complete_workflow(wf.workflow_id, notes=notes or None)
+            self.output(f"✓ Workflow [{wf.workflow_id[:8]}] completed.")
+        except Exception as exc:
+            self.output(f"✗ Failed to complete workflow: {exc}")
+
+    def _abort_workflow_ui(self):
+        wf_id_input = self._ask("Workflow ID (or prefix)").strip()
+        if not wf_id_input:
+            return
+        wfs = self.operation_service.list_workflows(status=WorkflowStatus.ACTIVE)
+        matched = [w for w in wfs if w.workflow_id.startswith(wf_id_input)]
+        if not matched:
+            self.output(f"Active workflow not found: {wf_id_input}")
+            return
+        wf = matched[0]
+        notes = self._ask("Abort reason / notes (optional)", wf.notes)
+        try:
+            self.operation_service.abort_workflow(wf.workflow_id, notes=notes or None)
+            self.output(f"✓ Workflow [{wf.workflow_id[:8]}] aborted.")
+        except Exception as exc:
+            self.output(f"✗ Failed to abort workflow: {exc}")
+
+    def _workflow_timeline_ui(self):
+        wf_id_input = self._ask("Workflow ID (or prefix)").strip()
+        if not wf_id_input:
+            return
+        wfs = self.operation_service.list_workflows()
+        matched = [w for w in wfs if w.workflow_id.startswith(wf_id_input)]
+        if not matched:
+            self.output(f"Workflow not found: {wf_id_input}")
+            return
+        wf = matched[0]
+        entries = self.operation_service.get_workflow_timeline(wf.workflow_id)
+        self.output(f"\nWORKFLOW #{wf.workflow_id[:8]}")
+        self.output(f"{wf.title}")
+        self.output(f"Status: {wf.status.value.upper()}\n")
+        if not entries:
+            self.output("  (no activity recorded for this workflow)")
+        else:
+            self.output(f"  {'TIME':<10} {'CATEGORY':<14} {'EVENT'}")
+            for e in entries:
+                t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+                self.output(f"  {t_str:<10} {e.category:<14} {e.title}")
+        self.output("")
+        self._ask("Press Enter to continue", "")
 
     def _ad_knowledge(self):
         articles = list_ad_articles()

@@ -109,6 +109,7 @@ class ToolExecutionRecord:
     duration_s: float
     parameters: dict[str, Any]
     success: bool
+    id: str = field(default_factory=lambda: f"exec-{uuid.uuid4().hex[:8]}")
     returncode: int | None = None
     error_kind: str | None = None
     error: str | None = None
@@ -123,6 +124,7 @@ class ToolExecutionRecord:
             target_id=self.target or "global",
             ok=self.success,
             payload={
+                "tool_execution_id": self.id,
                 "operation": self.operation,
                 "parameters": self.parameters,
                 "duration_s": self.duration_s,

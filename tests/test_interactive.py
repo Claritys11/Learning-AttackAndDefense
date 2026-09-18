@@ -88,8 +88,8 @@ def test_ad_and_gzctf_knowledge_console():
         store = ContextStore(f"{d}/state.db")
         store.save(OperatorContext(operator_name="Kai"))
 
-        # Test A&D menu (3) -> select Knowledge Base (8) -> select article 1 -> Back (0) -> Back (0) -> Exit (0)
-        answers = iter(["3", "8", "1", "0", "0", "0"])
+        # Test A&D menu (3) -> select Knowledge Base (9) -> select article 1 -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["3", "9", "1", "0", "0", "0"])
         output = []
         console = InteractiveConsole(store, lambda _p: next(answers), output.append)
         console.run()
@@ -184,8 +184,8 @@ def test_operator_workflow_with_evidence_saving():
         targets = TargetService(f"{d}/state.db")
         targets.add_target(Target("web", "web", "127.0.0.1", Role.ENEMY))
 
-        # Main menu (2: Tools) -> Nmap (1) -> Port Scan (2) -> host ("") -> ports ("80") -> Execute? "y" -> Save evidence? "y" -> Record Operator Action? "y" -> Category ("") -> Summary ("") -> Back (0) -> Back (0) -> Exit (0)
-        answers = iter(["2", "1", "2", "", "80", "y", "y", "y", "", "", "0", "0", "0"])
+        # Main menu (2: Tools) -> Nmap (1) -> Port Scan (2) -> host ("") -> ports ("80") -> Execute? "y" -> Save evidence? "y" -> Record Operator Action? "y" -> Category ("") -> Summary ("") -> Attach to workflow? "N" -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["2", "1", "2", "", "80", "y", "y", "y", "", "", "N", "0", "0", "0"])
         output = []
         console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=MockRunner(), sink=sink)
         console.run()
@@ -258,7 +258,7 @@ def test_interactive_ad_operations_console():
         # 0. Exit
         answers = iter([
             "3", "1", "1", "2", "0",
-            "2", "1", "recon", "", "manual", "scan", "Initial port sweep", "completed", "0",
+            "2", "1", "recon", "", "manual", "scan", "Initial port sweep", "completed", "N", "0",
             "3", "1", "", "http/80", "SQL injection", "planned", "testing", "0",
             "4", "1", "own-box", "nginx/80", "Config hardening", "completed", "reloaded", "0",
             "5", "1", "", "HTTP response", "flag{test_flag_12345}", "validated", "got flag", "0",
@@ -278,3 +278,33 @@ def test_interactive_ad_operations_console():
         assert "Flag recorded: flag{...12345}" in text
         assert "SLA observation recorded" in text
         assert "ACTIVITY TIMELINE" in text
+
+
+def test_interactive_workflow_console():
+    with tempfile.TemporaryDirectory() as d:
+        store = ContextStore(f"{d}/state.db")
+        store.save(OperatorContext(operator_name="Kai", selected_target="target-03", current_round=1))
+        targets = TargetService(f"{d}/state.db")
+        targets.add_target(Target("target-03", "target-03", "10.0.0.13", Role.ENEMY))
+
+        # Test A&D menu (3) -> Workflows (8)
+        # 1. Start Workflow (2) -> "Investigate web" -> "Understand HTTP" -> "" (def target) -> "operator note"
+        # 2. List Workflows (1) -> Enter
+        # 3. Open Workflow (3) -> "" (no id, cancel)
+        # 4. Back (0) -> Back (0) -> Exit (0)
+        answers = iter([
+            "3", "8",
+            "2", "Investigate web", "Understand HTTP", "", "operator note",
+            "1", "",
+            "3", "",
+            "0", "0", "0"
+        ])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append)
+        console.run()
+        text = "\n".join(output)
+
+        assert "OPERATOR WORKFLOWS" in text
+        assert "Workflow started:" in text
+        assert "Investigate web" in text
+        assert "WORKFLOW LIST" in text
