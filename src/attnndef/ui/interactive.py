@@ -439,9 +439,10 @@ class InteractiveConsole:
                 f"  Active Round:     {self.context.current_round}\n"
                 f"  Selected Target:  {self.context.selected_target or '(none)'}\n\n"
                 "  1. WireGuard Status Check\n"
-                "  2. Advance / Set Active Round\n"
+                "  2. Set Local Active Round (tracking only)\n"
                 "  3. Set Target Subnet\n"
                 "  0. Back"
+
             )
             choice = self._ask("Select", "0")
             if choice == "0":

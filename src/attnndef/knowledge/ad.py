@@ -144,24 +144,26 @@ If you delete the service or block all POST requests with an iptables firewall:
     "traffic_monitoring": KnowledgeArticle(
         id="traffic_monitoring",
         title="Traffic Monitoring & Incident Response",
-        summary="Using tcpdump and socket tools to detect, replay, and counter enemy attacks.",
+        summary="Using tcpdump and socket tools for traffic analysis, attack observation, and defensive remediation.",
         category="attack-defense",
         tags=("monitoring", "tcpdump", "incident-response"),
         content="""# Traffic Monitoring & Incident Response
 
 ## Watching the Wire
-While your team is attacking, enemy teams are attacking you. Often, the best source of new exploits is your own network traffic:
+While your team is operating, enemy teams will target your services. Your own network traffic is an invaluable telemetry source:
 - Run bounded packet captures (`tcpdump -i <interface> -n -w /tmp/capture.pcap 'tcp port <service_port>'`).
-- Filter for incoming HTTP requests or binary payloads containing flag patterns (`flag{` or common indicators).
-- When an enemy successfully exploits your service, reconstruct their payload from the capture stream.
-- Use their payload to:
-  1. Patch your own vulnerability immediately.
-  2. Turn their exploit against other teams who haven't patched yet.
+- Filter for incoming HTTP requests or payloads targeting known service ports.
+- When an exploit attempt is observed against your service, reconstruct the request structure and input parameters.
+- Use these observations to:
+  1. Understand the attacker's methodology and identify the vulnerable code path.
+  2. Develop and apply a surgical defensive patch.
+  3. Verify that the patched service resists the observed attack pattern while preserving SLA.
 
 ## System Socket Monitoring
 - Check listening ports and active inbound connections using `ss -tulpn` or `ss -tan`.
-- Identify suspicious persistent connections or reverse shells.
+- Identify unexpected persistent connections or listening sockets.
 """,
+
     ),
 }
 

@@ -122,6 +122,24 @@ def test_http_adapter_and_service():
     assert "POST" in runner.last_command
     assert "--data-binary" in runner.last_command
     assert "-H" in runner.last_command
+    assert "--" in runner.last_command
+
+    with pytest.raises(ValueError, match="start with a hyphen"):
+        adapter.execute(HttpRequest(url="-v"))
+    with pytest.raises(ValueError, match="empty"):
+        adapter.execute(HttpRequest(url="  "))
+
+def test_integration_delegation_to_canonical_tools():
+    from attnndef.integrations.nmap import parse_nmap_xml as integ_parse, validate_ports as integ_val
+    from attnndef.tools.nmap import parse_nmap_xml as tool_parse, validate_ports as tool_val
+    assert integ_parse is tool_parse
+    assert integ_val is tool_val
+
+    from attnndef.integrations.discovery import DiscoveredHost as integ_host, parse_discovery_xml as integ_disc
+    from attnndef.tools.nmap import DiscoveredHost as tool_host, parse_discovery_xml as tool_disc
+    assert integ_host is tool_host
+    assert integ_disc is tool_disc
+
 
 def test_ffuf_adapter_and_service():
     sample_json = """{

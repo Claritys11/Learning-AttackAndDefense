@@ -72,54 +72,62 @@ cat "$GZCTF_FLAG_FILE"  # Docker: /flag, K8s: /gzctf-flag/flag
     "sla_checker": KnowledgeArticle(
         id="sla_checker",
         title="GZCTF SLA Checker & Health Evaluation",
-        summary="Checker cadence, exit codes, push/pull checks, and avoiding SLA penalties.",
+        summary="Checker cadence, enochecker3 exit codes, and exact scoring calculations.",
         category="gzctf",
-        tags=("gzctf", "sla", "checker"),
+        tags=("gzctf", "sla", "checker", "scoring"),
         content="""# GZCTF SLA Checker & Health Evaluation
 
 ## Checker Execution Model
-- The SLA checker operates independently of the round advance scheduler via `AdCheckerService` (running on a ~10-second background cadence).
+- The SLA checker operates independently of the round advance scheduler via `AdCheckerService` (running on a 10-second background cadence, `MaxCheckAttempts = 3`, `RetryDelay = 1.5s`).
 - A slow checker cannot block the round advance.
 - The platform spins up dedicated checker containers that connect to the team's target port.
 
-## Checker Contract
-1. **Target Verification**: The checker attempts standard service interaction (HTTP request, socket handshake, database query).
-2. **Putflag / Getflag**: In challenges requiring state verification, the checker plants a unique check string or attempts to retrieve a test token.
-3. **Exit Code Interpretation**:
-   - Exit `0`: Service healthy, SLA awarded for the tick.
-   - Exit `1` or non-zero: Service failed health check, SLA lost for the tick.
-   - Timeout: Treated as failure (SLA lost).
+## Checker Contract & Exit Code Mapping
+In GZCTF's check runner (`AdCheckMapping`), check status is resolved directly from process exit codes:
+- **Custom Checker (enochecker3 standard contract)**:
+  * Exit `0` -> `Ok`: Service is operational, responding correctly, and passed functional tests.
+  * Exit `1` -> `Mumble`: Service reachable but returned invalid/corrupted data or violated API schema.
+  * Exit `2` -> `Offline`: Service port connection refused, timed out, or process down.
+  * Exit `3` or unhandled -> `InternalError`: Infrastructure or checker failure (earns 0 this tick, but does not retroactively drag down score).
+- **Built-in TCP Probe (when no custom checker is configured)**:
+  * Exit `0` -> `Ok`
+  * Any non-zero exit -> `Offline`
 
-## Operator Takeaway
-When developing patches on your team VM, run a local imitation of the checker script to verify that legitimate application functionality remains 100% operational before restarting the live service.
+## Exact GZCTF Scoring Math (`AdScoring.cs`)
+- Score formula: `Total = Attack + SLA - DefenseLoss`
+- **Attack Points**: `Σ (AttackPool / k)` where `k` is the count of teams that stole that specific flag (`AttackPool = 1.0`). Rewards unique exploits.
+- **Defense Loss**: `DefensePool * compromisedFlags` (`DefensePool = 1.0`). Penalized once per distinct compromised flag regardless of how many adversaries stole it.
+- **SLA Points**: `Σ (TickCredit * SlaFieldFactor)` where:
+  * `TickCredit`: `1.0` (clean Ok), `0.5` (recovering: Ok after Offline/Mumble), `0.0` (Offline, Mumble, or InternalError).
+  * `SlaFieldFactor`: `sqrt(max(1, activeTeams))`.
 """,
     ),
     "competition_ops": KnowledgeArticle(
         id="competition_ops",
         title="GZCTF Competition Operations & Setup",
-        summary="WireGuard VPN setup, SSH access, competition domain, and submission rules.",
+        summary="Generic GZCTF platform mechanics vs specific tournament deployment profiles.",
         category="gzctf",
         tags=("gzctf", "operations", "wireguard", "ssh"),
         content="""# GZCTF Competition Operations & Setup
 
-## 1. Network Connectivity (WireGuard VPN)
-- The competition arena is hosted in an isolated network reachable via WireGuard.
-- Download the client configuration (`wg0.conf`) from the competition portal.
-- Connect using `wg-quick up wg0` or NetworkManager.
-- Verify connectivity: `wg show` and ping the gateway or your designated VM.
+## 1. Generic GZCTF Architecture vs Competition Deployment
+It is essential to distinguish built-in platform features from event-specific rules:
+- **Universal GZCTF Engine Capabilities**:
+  * Network plane: WireGuard sidecar (`wg-config`, `AdWireGuardSyncService`, UDP port 51820).
+  * SSH jump bastion (`ssh-jump` on port 22022) with keyed accounts (`<challengeId>@jump-host`).
+  * Dedicated API endpoints: `/api/Game/{id}/Ad/Vpn/Config`, `/api/Game/{id}/Ad/Targets`, `/api/Game/{id}/Ad/Submit`.
+- **Tournament / Specific Deployment** (e.g. Grand Final at `jjz.jatimprov.go.id`):
+  * Platform domain: `jjz.jatimprov.go.id`.
+  * Connectivity: WireGuard tunnel (typically client interface `wg0`).
+  * Host access: SSH key-based access to provisioned team VMs.
+  * Round duration: Configured between 1 and 5 minutes per tick (governed by `Game.AdTickSeconds`).
+  * Tournament policy: Strict prohibition of infrastructure DoS and anti-collusion between teams.
 
-## 2. Server Access (SSH Keys)
-- Every team is provisioned a VM accessed via SSH key authentication.
-- Recommended SSH configuration:
-  ```bash
-  ssh -i ~/.ssh/id_rsa -p <port> <user>@<team_vm_ip>
-  ```
-- All team VMs start with identical code. Inspect `/var/www`, `/opt`, or home directory to locate challenge services.
-
-## 3. Flag Submission Workflow
-- Flags can be submitted via the platform UI or programmatic API endpoint.
-- Respect submission rate limits; automated submission scripts should submit unique flags immediately upon extraction.
-- Strict anti-cheat: Sharing flags or credentials between teams results in immediate disqualification.
+## 2. Operator Workflow on Competition Day
+1. Bring up VPN interface: `sudo wg-quick up wg0` and verify with `wg show`.
+2. Access team VM via SSH: `ssh -i ~/.ssh/id_rsa -p <port> <user>@<team_vm_ip>`.
+3. Inspect and backup service source code before applying changes.
+4. Keep patches surgical to preserve `Ok` status and avoid `Mumble` or `Offline` SLA penalties.
 """,
     ),
 }

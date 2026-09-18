@@ -50,7 +50,7 @@ Practical, competition-tested concepts:
 * **Scoring Dynamics**: Attack points, Defense deductions, and SLA availability.
 * **SLA & Availability**: Why "Patched" does not equal "Good Defense" if a patch breaks legitimate functionality or causes service downtime.
 * **Defensive Patching**: Surgical remediation, backup strategies, and smoke testing.
-* **Traffic Monitoring**: Reconstructing enemy payloads from incoming network packets to develop instant patches and counter-attacks.
+* **Traffic Monitoring**: Analyzing incoming network traffic to understand adversary behavior, identify unpatched flaws, harden services, and verify defense.
 
 ### C. GZCTF Platform Operations
 Derived directly from primary GZCTF documentation and source:

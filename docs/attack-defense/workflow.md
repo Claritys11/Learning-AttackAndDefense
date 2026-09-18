@@ -42,4 +42,4 @@ Repeat  ◄───  Monitor ◄───  Verify  ◄───  Patch ◄─�
 - Verify SLA checker passes.
 
 ### 9. Traffic Monitoring
-- Monitor incoming traffic using `tcpdump` to detect enemy exploit attempts, analyze their payloads, and counter-attack unpatched teams.
+- Monitor incoming traffic using `tcpdump` to observe adversary exploit patterns, isolate malicious payloads, develop surgical patches, and verify defensive efficacy.

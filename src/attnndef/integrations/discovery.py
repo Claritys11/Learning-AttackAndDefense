@@ -4,12 +4,9 @@ import ipaddress
 import time
 from ..targets import Scope, Target, TargetService, Role
 from .tool_runner import ToolResult, ToolRunner
+from ..tools.nmap import DiscoveredHost, parse_discovery_xml
 
-@dataclass(frozen=True)
-class DiscoveredHost:
-    host: str
-    status: str
-    observed_at: float
+__all__ = ["DiscoveredHost", "parse_discovery_xml", "DiscoveryAdapter", "DiscoveryService"]
 
 @dataclass(frozen=True)
 class DiscoveryAdapter:
@@ -24,18 +21,6 @@ class DiscoveryAdapter:
         result = self.runner.run([self.binary, "-sn", "-oX", "-", str(network_obj)], timeout_s=timeout_s)
         return result, parse_discovery_xml(result.stdout)
 
-def parse_discovery_xml(raw: str) -> tuple[DiscoveredHost, ...]:
-    import xml.etree.ElementTree as ET
-    if not raw.strip(): return ()
-    try: root = ET.fromstring(raw)
-    except ET.ParseError as exc: raise ValueError(f"invalid discovery XML: {exc}") from exc
-    now = time.time(); hosts = []
-    for host in root.findall(".//host"):
-        address = host.find("address")
-        status = host.find("status")
-        if address is not None and address.attrib.get("addr"):
-            hosts.append(DiscoveredHost(address.attrib["addr"], status.attrib.get("state", "unknown") if status is not None else "unknown", now))
-    return tuple(hosts)
 
 @dataclass
 class DiscoveryService:

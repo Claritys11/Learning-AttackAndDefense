@@ -40,7 +40,15 @@ class HttpAdapter:
     binary: str = "curl"
 
     def execute(self, request: HttpRequest) -> tuple[ToolResult, HttpResponse]:
-        url = request.url
+
+        raw_url = request.url.strip()
+        if not raw_url:
+            raise ValueError("URL must not be empty")
+        if raw_url.startswith("-"):
+            raise ValueError("URL must not start with a hyphen")
+
+
+        url = raw_url
         if not (url.startswith("http://") or url.startswith("https://")):
             url = f"http://{url}"
 
@@ -54,7 +62,8 @@ class HttpAdapter:
         if request.body is not None:
             cmd.extend(["--data-binary", request.body])
 
-        cmd.append(url)
+        cmd.extend(["--", url])
+
 
         res = self.runner.run(cmd, timeout_s=request.timeout_s + 2.0)
         status_code, headers, body = parse_http_raw(res.stdout)
