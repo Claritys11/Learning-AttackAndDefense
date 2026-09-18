@@ -9,7 +9,7 @@ Stable service identity is `(protocol, port)`. The diff reports:
 - `CHANGED`: name, version, or another service field changed;
 - `STATUS_CHANGED`: only service status changed.
 
-`IntelligenceDiff.entries` is structured for automation and `render()` provides compact operator-readable output. Entries use deterministic identity ordering. `diff_history()` compares the newest two observations when history is ordered newest-first by `TargetService.history()`.
+`IntelligenceDiff` carries observation IDs and session/round metadata at result level. `diff_history(history, newest_first=True)` makes ordering explicit; it compares newest-to-previous by default and oldest-to-newest when `newest_first=False`.
 
 Example:
 
