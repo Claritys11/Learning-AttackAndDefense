@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 artifacts/
+.claude-import/
+Attndef.zip
+refs/*/.git/
 .coverage
 .env
 refs/*/.venv/
