@@ -19,7 +19,17 @@ A community-oriented, local-first Attack & Defense learning repository for LKS-s
 
 This is an educational project, not a production security platform. Use only against fixtures, VMs, containers, or competition targets where you have explicit authorization.
 
-## Start here
+## Operator console
+
+The primary entry point is now an interactive shell:
+
+```bash
+python -m pip install -e .
+attnndef
+```
+
+Read [`docs/operator-console.md`](docs/operator-console.md) for first-run configuration, SQLite state, direct CLI compatibility, and the current Phase 1 boundary. The shell reports unavailable workflows honestly while later vertical slices are built.
+
 
 1. Read `docs/quickstart.md` for the shortest working setup.
 2. Read `docs/tools-guide.md` for the command map and function contracts.

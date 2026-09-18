@@ -22,6 +22,7 @@ from .attack.extractor import RegexExtractor
 from .attack.runner import AttackRunner
 from .core.models import Evidence, Role
 from .core.registry import TargetRegistry
+from .context import ContextStore
 from .defense.health import HealthChecker
 from .defense.patcher import TextReplacePatch
 from .defense.replay import ExploitReplay
@@ -41,7 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="attnndef")
     p.add_argument("--registry", default="config/targets.json")
     p.add_argument("--sink", default="evidence/evidence.jsonl")
-    sub = p.add_subparsers(dest="command", required=True)
+    p.add_argument("--state-db", default="~/.attnndef/state.db")
+    p.add_argument("--debug", action="store_true")
+    sub = p.add_subparsers(dest="command")
 
     d = sub.add_parser("discover", help="list targets from local registry")
     d.add_argument("--role", choices=[r.value for r in Role])
@@ -94,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command is None:
+        from .ui import InteractiveConsole
+        return InteractiveConsole(ContextStore(args.state_db)).run()
     log = setup_logging()
     sink = LocalSink(args.sink)
     registry = TargetRegistry.from_file(args.registry)
