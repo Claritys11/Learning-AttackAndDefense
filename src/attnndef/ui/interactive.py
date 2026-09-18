@@ -9,6 +9,20 @@ from ..integrations import ReconService
 from ..integrations.tool_runner import ToolRunner
 from ..io.sink import LocalSink
 from ..knowledge import list_ad_articles, list_gzctf_articles
+from ..operations import (
+    ActionCategory,
+    AttackRecord,
+    AttackStatus,
+    DefenseRecord,
+    DefenseStatus,
+    FlagRecord,
+    FlagStatus,
+    OperationService,
+    OperatorAction,
+    RoundStatus,
+    SlaObservation,
+    SlaStatus,
+)
 from ..targets import Role, Scope, Target, TargetService, diff_history, compare_observations
 from ..tools import (
     FfufAdapter,
@@ -47,12 +61,18 @@ class InteractiveConsole:
         gdb_service: GdbService | None = None,
         system_service: SystemService | None = None,
         sink: LocalSink | None = None,
+        operation_service: OperationService | None = None,
     ):
         self.store = store
         self.input = input_fn
         self.output = output_fn
         self.context = store.load()
         self.target_service = TargetService(store.path)
+        self.operation_service = operation_service or OperationService(store.path, target_service=self.target_service)
+        if self.context and not self.context.session_id:
+            active_s = self.operation_service.get_active_session()
+            if active_s:
+                self.context.session_id = active_s.session_id
         self.recon_service = recon_service
         self.scope = scope
         self.sink = sink
@@ -263,13 +283,38 @@ class InteractiveConsole:
             output_summary=summary,
             details=details or {},
         )
-        self.last_execution = record
+        ev_id: str | None = None
         if self.sink is not None:
             choice = self._ask("Save as evidence? [y/N]", "N").lower()
             if choice in ("y", "yes"):
                 ev = record.to_evidence()
                 self.sink.write(ev)
+                ev_id = ev.id
                 self.output(f"✓ Evidence recorded: {ev.id}")
+            act_choice = self._ask("Record as Operator Action? [y/N]", "N").lower()
+            if act_choice in ("y", "yes"):
+                cat_default = "recon" if tool in ("nmap", "ffuf") else ("system" if tool in ("sys", "tcpdump") else "verification")
+                cat_str = self._ask(f"Category (recon/attack/defense/flag/verification/system)", cat_default).lower()
+                try:
+                    category = ActionCategory(cat_str)
+                except ValueError:
+                    category = ActionCategory.RECON
+                sum_str = self._ask("Action Summary", summary or f"{tool} {operation}")
+                session_id = self.context.session_id if self.context else ""
+                round_id = self.context.current_round if self.context else 0
+                act = self.operation_service.record_action(
+                    session_id=session_id,
+                    round_id=round_id,
+                    category=category,
+                    tool=tool,
+                    operation=operation,
+                    summary=sum_str,
+                    target_id=self.context.selected_target if self.context else None,
+                    status="completed" if success else "failed",
+                    evidence_id=ev_id,
+                    details={"parameters": parameters, "duration_s": duration_s},
+                )
+                self.output(f"✓ Operator Action recorded: [{act.category.value.upper()}] {act.summary}")
 
     def _resolve_target_and_scope(self, default_host: str = "") -> tuple[bool, Target | None, str]:
         target: Target | None = None
@@ -892,6 +937,393 @@ class InteractiveConsole:
                 self._present_failure("System", "localhost", 0.0, "exception", str(exc))
 
     def _ad_menu(self):
+        while True:
+            rnd = self.context.current_round if self.context else 0
+            self.output(
+                "\nATTACK & DEFENSE OPERATIONS\n"
+                "────────────────────────────\n"
+                f"  Active Round: Round #{rnd} [LOCAL TRACKING]\n"
+                f"  Platform:     {self.context.platform if self.context else 'jjz.jatimprov.go.id'}\n"
+                f"  Sync Status:  Local round tracking (remote platform: not connected)\n\n"
+                "  1. Current Round & Ticks\n"
+                "  2. Operator Actions\n"
+                "  3. Attack Records\n"
+                "  4. Defense Records\n"
+                "  5. Flag State\n"
+                "  6. SLA / Health Observations\n"
+                "  7. Activity Timeline\n"
+                "  8. Knowledge Base\n"
+                "  0. Back"
+            )
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            elif choice == "1":
+                self._ad_current_round()
+            elif choice == "2":
+                self._ad_actions()
+            elif choice == "3":
+                self._ad_attacks()
+            elif choice == "4":
+                self._ad_defenses()
+            elif choice == "5":
+                self._ad_flags()
+            elif choice == "6":
+                self._ad_sla()
+            elif choice == "7":
+                self._ad_timeline()
+            elif choice == "8":
+                self._ad_knowledge()
+            else:
+                self.output("Invalid selection.")
+
+    def _ad_current_round(self):
+        while True:
+            rnd = self.context.current_round if self.context else 0
+            sid = self.context.session_id if self.context else "(none)"
+            ticks = self.operation_service.list_ticks(rnd)
+            active_r = self.operation_service.get_round(rnd)
+            status_str = active_r.status.value.upper() if active_r else "ACTIVE"
+            self.output(
+                "\nCURRENT ROUND (LOCAL TRACKING)\n"
+                "────────────────────────────\n"
+                f"  Competition:  {self.context.competition_name if self.context else 'Grand Final Attack & Defense'}\n"
+                f"  Session ID:   {sid}\n"
+                f"  Round Number: #{rnd}\n"
+                f"  Round Status: {status_str}\n"
+                f"  Local Ticks:  {len(ticks)} ticks recorded\n"
+                "  Notice:       Local round tracking | Remote platform state: not connected\n\n"
+                "  1. Set / Advance Local Round\n"
+                "  2. Complete Current Round\n"
+                "  3. Record Local Tick Observation\n"
+                "  0. Back"
+            )
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            if choice == "1":
+                val = self._ask("New Round Number", str(rnd + 1))
+                try:
+                    new_rnd = int(val)
+                    if self.context:
+                        self.context.current_round = new_rnd
+                        self.store.save(self.context)
+                    self.operation_service.start_round(sid, new_rnd)
+                    self.output(f"✓ Local active round set to #{new_rnd}.")
+                except ValueError:
+                    self.output("Invalid round number.")
+            elif choice == "2":
+                self.operation_service.complete_round(rnd)
+                self.output(f"✓ Local round #{rnd} completed.")
+            elif choice == "3":
+                next_tick = len(ticks) + 1
+                tick_val = self._ask("Tick Number", str(next_tick))
+                try:
+                    t_num = int(tick_val)
+                    self.operation_service.record_tick(sid, rnd, t_num)
+                    self.output(f"✓ Local tick #{t_num} recorded for round #{rnd}.")
+                except ValueError:
+                    self.output("Invalid tick number.")
+
+    def _ad_actions(self):
+        while True:
+            rnd = self.context.current_round if self.context else 0
+            actions = self.operation_service.list_actions(round_id=rnd if rnd > 0 else None, limit=20)
+            self.output(
+                "\nOPERATOR ACTIONS\n"
+                "────────────────────────────"
+            )
+            if not actions:
+                self.output("  (no operator actions recorded)")
+            else:
+                for a in actions:
+                    tgt = f" [{a.target_id}]" if a.target_id else ""
+                    t_str = time.strftime("%H:%M:%S", time.localtime(a.timestamp))
+                    self.output(f"  {t_str}  [{a.category.value.upper():<12}] {a.summary}{tgt} ({a.status})")
+            self.output(
+                "\n  1. Record New Operator Action\n"
+                "  0. Back"
+            )
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            if choice == "1":
+                cat_str = self._ask("Category (recon/attack/defense/flag/verification/system)", "recon").lower()
+                try:
+                    cat = ActionCategory(cat_str)
+                except ValueError:
+                    self.output("Invalid category.")
+                    continue
+                def_tgt = self.context.selected_target if self.context else ""
+                tgt = self._ask("Target ID (optional)", def_tgt)
+                tool = self._ask("Tool (optional, e.g. manual, nmap, http)", "manual")
+                op = self._ask("Operation (e.g. port_scan, config_change)", "action")
+                summary = self._ask("Summary")
+                if not summary:
+                    self.output("Summary is required.")
+                    continue
+                status = self._ask("Status", "completed")
+                sid = self.context.session_id if self.context else ""
+                try:
+                    act = self.operation_service.record_action(
+                        sid, rnd, cat, tool, op, summary, target_id=tgt or None, status=status
+                    )
+                    self.output(f"✓ Action recorded: [{act.category.value.upper()}] {act.summary}")
+                except Exception as exc:
+                    self.output(f"✗ Failed to record action: {exc}")
+
+    def _ad_attacks(self):
+        while True:
+            rnd = self.context.current_round if self.context else 0
+            attacks = self.operation_service.list_attacks(round_id=rnd if rnd > 0 else None)
+            self.output(
+                "\nATTACK RECORDS\n"
+                "────────────────────────────"
+            )
+            if not attacks:
+                self.output("  (no attack records)")
+            else:
+                for atk in attacks:
+                    self.output(f"  [{atk.id[:8]}] Target: {atk.target_id:<12} Service: {atk.service:<10} Status: {atk.status.value.upper():<10} Method: {atk.method}")
+            self.output(
+                "\n  1. Record Attack Action\n"
+                "  2. Update Attack Status\n"
+                "  0. Back"
+            )
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            if choice == "1":
+                def_tgt = self.context.selected_target if self.context else ""
+                tgt = self._ask("Target ID", def_tgt)
+                if not tgt:
+                    self.output("Target ID is required.")
+                    continue
+                svc = self._ask("Service (e.g. http/80)", "http/80")
+                method = self._ask("Method / Exploit Description")
+                if not method:
+                    self.output("Method description is required.")
+                    continue
+                status_str = self._ask("Status (planned/in_progress/success/failed/aborted)", "planned").lower()
+                try:
+                    st = AttackStatus(status_str)
+                except ValueError:
+                    st = AttackStatus.PLANNED
+                notes = self._ask("Notes (optional)", "")
+                try:
+                    atk = self.operation_service.record_attack(rnd, tgt, svc, method, status=st, notes=notes)
+                    self.output(f"✓ Attack record created: [{atk.id[:8]}] against {tgt} ({st.value.upper()})")
+                except Exception as exc:
+                    self.output(f"✗ Failed to record attack: {exc}")
+            elif choice == "2":
+                atk_id = self._ask("Attack ID (prefix or full)")
+                found = None
+                for a in attacks:
+                    if a.id.startswith(atk_id):
+                        found = a
+                        break
+                if not found:
+                    self.output("Attack record not found.")
+                    continue
+                new_st_str = self._ask("New Status (planned/in_progress/success/failed/aborted)", "success").lower()
+                try:
+                    new_st = AttackStatus(new_st_str)
+                except ValueError:
+                    self.output("Invalid status.")
+                    continue
+                notes = self._ask("Notes / Update details", found.notes)
+                self.operation_service.update_attack_status(found.id, new_st, notes=notes)
+                self.output(f"✓ Attack [{found.id[:8]}] updated to {new_st.value.upper()}.")
+
+    def _ad_defenses(self):
+        while True:
+            rnd = self.context.current_round if self.context else 0
+            defenses = self.operation_service.list_defenses(round_id=rnd if rnd > 0 else None)
+            self.output(
+                "\nDEFENSE RECORDS\n"
+                "────────────────────────────"
+            )
+            if not defenses:
+                self.output("  (no defense records)")
+            else:
+                for df in defenses:
+                    self.output(f"  [{df.id[:8]}] Target: {df.target_id:<12} Service: {df.service:<10} Status: {df.status.value.upper():<10} Action: {df.action}")
+            self.output(
+                "\n  1. Record Defense Action\n"
+                "  2. Update Defense Status\n"
+                "  0. Back"
+            )
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            if choice == "1":
+                def_tgt = self.context.selected_target if self.context else ""
+                tgt = self._ask("Target ID", def_tgt)
+                if not tgt:
+                    self.output("Target ID is required.")
+                    continue
+                svc = self._ask("Service (e.g. nginx/80)", "nginx/80")
+                action = self._ask("Remediation Action (e.g. config change, input validation patch)")
+                if not action:
+                    self.output("Action description is required.")
+                    continue
+                status_str = self._ask("Status (planned/in_progress/completed/failed/reverted)", "completed").lower()
+                try:
+                    st = DefenseStatus(status_str)
+                except ValueError:
+                    st = DefenseStatus.COMPLETED
+                notes = self._ask("Notes (optional)", "")
+                try:
+                    df = self.operation_service.record_defense(rnd, tgt, svc, action, status=st, notes=notes)
+                    self.output(f"✓ Defense record created: [{df.id[:8]}] for {tgt} ({st.value.upper()})")
+                except Exception as exc:
+                    self.output(f"✗ Failed to record defense: {exc}")
+            elif choice == "2":
+                df_id = self._ask("Defense ID (prefix or full)")
+                found = None
+                for d in defenses:
+                    if d.id.startswith(df_id):
+                        found = d
+                        break
+                if not found:
+                    self.output("Defense record not found.")
+                    continue
+                new_st_str = self._ask("New Status (planned/in_progress/completed/failed/reverted)", "completed").lower()
+                try:
+                    new_st = DefenseStatus(new_st_str)
+                except ValueError:
+                    self.output("Invalid status.")
+                    continue
+                notes = self._ask("Notes / Update details", found.notes)
+                self.operation_service.update_defense_status(found.id, new_st, notes=notes)
+                self.output(f"✓ Defense [{found.id[:8]}] updated to {new_st.value.upper()}.")
+
+    def _ad_flags(self):
+        while True:
+            rnd = self.context.current_round if self.context else 0
+            flags = self.operation_service.list_flags(round_id=rnd if rnd > 0 else None)
+            self.output(
+                "\nFLAG STATE (LOCAL TRACKING)\n"
+                "────────────────────────────"
+            )
+            if not flags:
+                self.output("  (no flags recorded)")
+            else:
+                for fl in flags:
+                    t_str = time.strftime("%H:%M:%S", time.localtime(fl.observed_at))
+                    self.output(f"  [{fl.id[:8]}] {t_str} Target: {fl.target_id:<12} {fl.flag_preview:<16} Status: {fl.status.value.upper():<10} Source: {fl.source}")
+            self.output(
+                "\n  1. Record Flag (Fingerprint Only, No Plaintext Stored)\n"
+                "  2. Update Flag Status\n"
+                "  0. Back"
+            )
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            if choice == "1":
+                def_tgt = self.context.selected_target if self.context else ""
+                tgt = self._ask("Target ID", def_tgt)
+                if not tgt:
+                    self.output("Target ID is required.")
+                    continue
+                source = self._ask("Source (e.g. HTTP response, SSH cat, file leak)", "HTTP response")
+                raw_flag = self._ask("Flag String (computed to SHA-256 fingerprint; raw text is NOT stored)")
+                if not raw_flag:
+                    self.output("Flag input is required.")
+                    continue
+                status_str = self._ask("Status (observed/validated/submitted/rejected/expired)", "validated").lower()
+                try:
+                    st = FlagStatus(status_str)
+                except ValueError:
+                    st = FlagStatus.VALIDATED
+                notes = self._ask("Notes (optional)", "")
+                try:
+                    fl = self.operation_service.record_flag(rnd, tgt, source, raw_flag, status=st, notes=notes)
+                    self.output(f"✓ Flag recorded: {fl.flag_preview} [{fl.fingerprint[:16]}...] Status: {fl.status.value.upper()}")
+                except Exception as exc:
+                    self.output(f"✗ Failed to record flag: {exc}")
+            elif choice == "2":
+                fl_id = self._ask("Flag ID (prefix or full)")
+                found = None
+                for f in flags:
+                    if f.id.startswith(fl_id):
+                        found = f
+                        break
+                if not found:
+                    self.output("Flag record not found.")
+                    continue
+                new_st_str = self._ask("New Status (observed/validated/submitted/rejected/expired)", "submitted").lower()
+                try:
+                    new_st = FlagStatus(new_st_str)
+                except ValueError:
+                    self.output("Invalid status.")
+                    continue
+                notes = self._ask("Notes / Update details", found.notes)
+                self.operation_service.update_flag_status(found.id, new_st, notes=notes)
+                self.output(f"✓ Flag [{found.id[:8]}] updated to {new_st.value.upper()}.")
+
+    def _ad_sla(self):
+        while True:
+            rnd = self.context.current_round if self.context else 0
+            sla_list = self.operation_service.list_sla(round_id=rnd if rnd > 0 else None, limit=20)
+            self.output(
+                "\nSLA / HEALTH (LOCAL OBSERVATIONS)\n"
+                "────────────────────────────\n"
+                "Notice: Local observations - not official platform checker\n"
+            )
+            if not sla_list:
+                self.output("  (no local SLA observations recorded)")
+            else:
+                for s in sla_list:
+                    lat = f"{s.latency_ms:.0f}ms" if s.latency_ms is not None else "n/a"
+                    t_str = time.strftime("%H:%M:%S", time.localtime(s.observed_at))
+                    self.output(f"  {t_str} Target: {s.target_id:<12} Service: {s.service:<10} Status: {s.status.value.upper():<8} Latency: {lat:<6} ({s.source})")
+            self.output(
+                "\n  1. Record Local SLA Observation\n"
+                "  0. Back"
+            )
+            choice = self._ask("Select", "0")
+            if choice == "0":
+                return
+            if choice == "1":
+                def_tgt = self.context.selected_target if self.context else ""
+                tgt = self._ask("Target ID", def_tgt)
+                if not tgt:
+                    self.output("Target ID is required.")
+                    continue
+                svc = self._ask("Service (e.g. http/80, ssh/22)", "http/80")
+                st_str = self._ask("Status (ok/mumble/offline/unknown)", "ok").lower()
+                try:
+                    st = SlaStatus(st_str)
+                except ValueError:
+                    st = SlaStatus.OK
+                lat_str = self._ask("Observed Latency in ms (optional)", "")
+                lat = float(lat_str) if lat_str else None
+                source = self._ask("Observation Source", "local")
+                try:
+                    obs = self.operation_service.record_sla(rnd, tgt, svc, st, latency_ms=lat, source=source)
+                    self.output(f"✓ SLA observation recorded: {tgt} {svc} -> {obs.status.value.upper()}")
+                except Exception as exc:
+                    self.output(f"✗ Failed to record SLA observation: {exc}")
+
+    def _ad_timeline(self):
+        rnd = self.context.current_round if self.context else 0
+        timeline = self.operation_service.get_timeline(round_id=rnd if rnd > 0 else None, limit=40)
+        self.output(
+            "\nACTIVITY TIMELINE\n"
+            "────────────────────────────"
+        )
+        if not timeline:
+            self.output("  (no activity recorded yet)")
+        else:
+            for entry in timeline:
+                t_str = time.strftime("%H:%M:%S", time.localtime(entry.timestamp))
+                tgt = f"{entry.target_id:<14}" if entry.target_id else " " * 14
+                self.output(f"  {t_str}  {entry.category:<12} {tgt} {entry.title:<30} {entry.status}")
+        self.output("")
+        self._ask("Press Enter to return", "")
+
+    def _ad_knowledge(self):
         articles = list_ad_articles()
         while True:
             self.output("ATTACK & DEFENSE KNOWLEDGE")

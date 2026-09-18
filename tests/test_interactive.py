@@ -88,8 +88,8 @@ def test_ad_and_gzctf_knowledge_console():
         store = ContextStore(f"{d}/state.db")
         store.save(OperatorContext(operator_name="Kai"))
 
-        # Test A&D menu (3) -> select article 1 -> Back (0) -> Exit (0)
-        answers = iter(["3", "1", "0", "0"])
+        # Test A&D menu (3) -> select Knowledge Base (8) -> select article 1 -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["3", "8", "1", "0", "0", "0"])
         output = []
         console = InteractiveConsole(store, lambda _p: next(answers), output.append)
         console.run()
@@ -184,8 +184,8 @@ def test_operator_workflow_with_evidence_saving():
         targets = TargetService(f"{d}/state.db")
         targets.add_target(Target("web", "web", "127.0.0.1", Role.ENEMY))
 
-        # Main menu (2: Tools) -> Nmap (1) -> Port Scan (2) -> host ("") -> ports ("80") -> Execute? "y" -> Save evidence? "y" -> Back (0) -> Back (0) -> Exit (0)
-        answers = iter(["2", "1", "2", "", "80", "y", "y", "0", "0", "0"])
+        # Main menu (2: Tools) -> Nmap (1) -> Port Scan (2) -> host ("") -> ports ("80") -> Execute? "y" -> Save evidence? "y" -> Record Operator Action? "y" -> Category ("") -> Summary ("") -> Back (0) -> Back (0) -> Exit (0)
+        answers = iter(["2", "1", "2", "", "80", "y", "y", "y", "", "", "0", "0", "0"])
         output = []
         console = InteractiveConsole(store, lambda _p: next(answers), output.append, runner=MockRunner(), sink=sink)
         console.run()
@@ -193,12 +193,17 @@ def test_operator_workflow_with_evidence_saving():
         assert "✓ Nmap completed" in text
         assert "80/tcp" in text
         assert "✓ Evidence recorded" in text
+        assert "✓ Operator Action recorded" in text
 
         entries = sink.read_all()
         assert len(entries) == 1
         assert entries[0]["kind"] == "tool_nmap"
         assert entries[0]["ok"] is True
         assert entries[0]["payload"]["operation"] == "port_scan"
+
+        actions = console.operation_service.list_actions()
+        assert len(actions) == 1
+        assert actions[0].tool == "nmap"
 
 def test_ssh_and_gdb_operator_workflows():
     import sys
@@ -233,3 +238,43 @@ def test_ssh_and_gdb_operator_workflows():
         text = "\n".join(output)
         assert "✓ GDB completed" in text
         assert "Reading symbols" in text
+
+def test_interactive_ad_operations_console():
+    with tempfile.TemporaryDirectory() as d:
+        store = ContextStore(f"{d}/state.db")
+        store.save(OperatorContext(operator_name="Kai", selected_target="enemy-box", current_round=1))
+        targets = TargetService(f"{d}/state.db")
+        targets.add_target(Target("enemy-box", "enemy-box", "10.0.0.5", Role.ENEMY))
+        targets.add_target(Target("own-box", "own-box", "10.0.0.2", Role.OWN))
+
+        # Test A&D Menu flows:
+        # 1. Round (1) -> Advance (1) -> "2" -> Back (0)
+        # 2. Action (2) -> Record (1) -> recon -> "" (def target) -> manual -> scan -> "Initial port sweep" -> completed -> Back (0)
+        # 3. Attack (3) -> Record (1) -> "" (def target) -> http/80 -> "SQL injection" -> planned -> "testing" -> Back (0)
+        # 4. Defense (4) -> Record (1) -> own-box -> nginx/80 -> "Config hardening" -> completed -> "reloaded" -> Back (0)
+        # 5. Flag (5) -> Record (1) -> "" (def target) -> HTTP response -> "flag{test_flag_12345}" -> validated -> "got flag" -> Back (0)
+        # 6. SLA (6) -> Record (1) -> own-box -> http/80 -> ok -> "50" -> local -> Back (0)
+        # 7. Timeline (7) -> Enter
+        # 0. Exit
+        answers = iter([
+            "3", "1", "1", "2", "0",
+            "2", "1", "recon", "", "manual", "scan", "Initial port sweep", "completed", "0",
+            "3", "1", "", "http/80", "SQL injection", "planned", "testing", "0",
+            "4", "1", "own-box", "nginx/80", "Config hardening", "completed", "reloaded", "0",
+            "5", "1", "", "HTTP response", "flag{test_flag_12345}", "validated", "got flag", "0",
+            "6", "1", "own-box", "http/80", "ok", "50", "local", "0",
+            "7", "",
+            "0", "0"
+        ])
+        output = []
+        console = InteractiveConsole(store, lambda _p: next(answers), output.append)
+        console.run()
+        text = "\n".join(output)
+
+        assert "Local active round set to #2" in text
+        assert "Action recorded: [RECON] Initial port sweep" in text
+        assert "Attack record created" in text
+        assert "Defense record created" in text
+        assert "Flag recorded: flag{...12345}" in text
+        assert "SLA observation recorded" in text
+        assert "ACTIVITY TIMELINE" in text

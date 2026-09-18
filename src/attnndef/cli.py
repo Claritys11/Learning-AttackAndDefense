@@ -149,6 +149,78 @@ def build_parser() -> argparse.ArgumentParser:
     psys.add_argument("--interface", default=None, help="interface for wg op")
     psys.add_argument("--json", action="store_true")
 
+    # Operational Core Subcommands
+    prnd = sub.add_parser("round", help="manage local round tracking and ticks")
+    prnd.add_argument("--set", type=int, dest="round_number", help="start or set active round number")
+    prnd.add_argument("--complete", action="store_true", help="complete the active round")
+    prnd.add_argument("--tick", type=int, help="record local tick observation")
+    prnd.add_argument("--list", action="store_true", help="list recorded rounds")
+    prnd.add_argument("--json", action="store_true")
+
+    pact = sub.add_parser("action", help="record or list operator actions")
+    pact.add_argument("--record", action="store_true", help="record an action")
+    pact.add_argument("--category", choices=["recon", "attack", "defense", "flag", "verification", "system"], default="recon")
+    pact.add_argument("--target", default=None, help="target ID")
+    pact.add_argument("--tool", default="manual")
+    pact.add_argument("--op", default="action")
+    pact.add_argument("--summary", default="", help="action summary")
+    pact.add_argument("--status", default="completed")
+    pact.add_argument("--round", type=int, default=None)
+    pact.add_argument("--list", action="store_true")
+    pact.add_argument("--json", action="store_true")
+
+    patk = sub.add_parser("attack", help="record, update, or list attack records")
+    patk.add_argument("--record", action="store_true", help="record a new attack")
+    patk.add_argument("--target", default=None, help="target ID")
+    patk.add_argument("--service", default="http/80")
+    patk.add_argument("--method", default="", help="attack / exploit method")
+    patk.add_argument("--status", choices=["planned", "in_progress", "success", "failed", "aborted"], default="planned")
+    patk.add_argument("--notes", default="")
+    patk.add_argument("--update", dest="update_id", default=None, help="attack ID to update")
+    patk.add_argument("--round", type=int, default=None)
+    patk.add_argument("--list", action="store_true")
+    patk.add_argument("--json", action="store_true")
+
+    pdf = sub.add_parser("defense", help="record, update, or list defense records")
+    pdf.add_argument("--record", action="store_true", help="record a new defense")
+    pdf.add_argument("--target", default=None, help="target ID")
+    pdf.add_argument("--service", default="http/80")
+    pdf.add_argument("--action", dest="defense_action", default="", help="remediation action")
+    pdf.add_argument("--status", choices=["planned", "in_progress", "completed", "failed", "reverted"], default="planned")
+    pdf.add_argument("--notes", default="")
+    pdf.add_argument("--update", dest="update_id", default=None, help="defense ID to update")
+    pdf.add_argument("--round", type=int, default=None)
+    pdf.add_argument("--list", action="store_true")
+    pdf.add_argument("--json", action="store_true")
+
+    pfl = sub.add_parser("flag", help="record, update, or list flag records (fingerprint only, no plaintext stored)")
+    pfl.add_argument("--record", dest="raw_flag", default=None, help="flag string (automatically converted to sha256 fingerprint)")
+    pfl.add_argument("--target", default=None, help="target ID")
+    pfl.add_argument("--source", default="manual", help="flag source")
+    pfl.add_argument("--status", choices=["observed", "validated", "submitted", "rejected", "expired"], default="observed")
+    pfl.add_argument("--notes", default="")
+    pfl.add_argument("--update", dest="update_id", default=None, help="flag ID to update")
+    pfl.add_argument("--round", type=int, default=None)
+    pfl.add_argument("--list", action="store_true")
+    pfl.add_argument("--json", action="store_true")
+
+    psla = sub.add_parser("sla", help="record or list local SLA observations")
+    psla.add_argument("--record", action="store_true", help="record SLA observation")
+    psla.add_argument("--target", default=None, help="target ID")
+    psla.add_argument("--service", default="http/80")
+    psla.add_argument("--status", choices=["ok", "mumble", "offline", "unknown"], default="ok")
+    psla.add_argument("--latency", type=float, default=None, help="observed latency in ms")
+    psla.add_argument("--source", default="local")
+    psla.add_argument("--round", type=int, default=None)
+    psla.add_argument("--list", action="store_true")
+    psla.add_argument("--json", action="store_true")
+
+    ptl = sub.add_parser("timeline", help="display chronological activity timeline")
+    ptl.add_argument("--round", type=int, default=None)
+    ptl.add_argument("--target", default=None)
+    ptl.add_argument("--limit", type=int, default=50)
+    ptl.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -400,6 +472,216 @@ def main(argv=None) -> int:
         else:
             print(res.stdout)
         return res.returncode or 0
+
+    if args.command == "round":
+        from .operations import OperationService
+        from .targets import TargetService
+        ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        ctx = ContextStore(args.state_db).load()
+        sid = ctx.session_id if ctx else "default-session"
+        if args.round_number is not None:
+            r = ops.start_round(sid, args.round_number)
+            if ctx:
+                ctx.current_round = args.round_number
+                ContextStore(args.state_db).save(ctx)
+            if getattr(args, "json", False):
+                print(json.dumps(r.__dict__, default=str, indent=2))
+            else:
+                print(f"Round #{r.round_id} started ({r.status.value})")
+            return 0
+        elif args.complete:
+            cur_rnd = ctx.current_round if ctx else 1
+            ok = ops.complete_round(cur_rnd)
+            if getattr(args, "json", False):
+                print(json.dumps({"round_id": cur_rnd, "completed": ok}))
+            else:
+                print(f"Round #{cur_rnd} completed: {ok}")
+            return 0
+        elif args.tick is not None:
+            cur_rnd = ctx.current_round if ctx else 1
+            t = ops.record_tick(sid, cur_rnd, args.tick)
+            if getattr(args, "json", False):
+                print(json.dumps(t.__dict__, default=str, indent=2))
+            else:
+                print(f"Tick #{t.tick_number} recorded for round #{t.round_id}")
+            return 0
+        elif args.list or True:
+            rounds = ops.list_rounds(sid)
+            if getattr(args, "json", False):
+                print(json.dumps([r.__dict__ for r in rounds], default=str, indent=2))
+            else:
+                for r in rounds:
+                    print(f"Round #{r.round_number}\tStatus: {r.status.value}\tStarted: {r.started_at}")
+            return 0
+
+    if args.command == "action":
+        from .operations import ActionCategory, OperationService
+        from .targets import TargetService
+        ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        ctx = ContextStore(args.state_db).load()
+        sid = ctx.session_id if ctx else "default-session"
+        cur_rnd = args.round if args.round is not None else (ctx.current_round if ctx else 1)
+        if args.record:
+            cat = ActionCategory(args.category)
+            act = ops.record_action(
+                sid, cur_rnd, cat, args.tool, args.op, args.summary, target_id=args.target, status=args.status
+            )
+            if getattr(args, "json", False):
+                print(json.dumps(act.__dict__, default=str, indent=2))
+            else:
+                print(f"Action [{act.category.value.upper()}] recorded: {act.summary} (ID: {act.id[:8]})")
+            return 0
+        else:
+            actions = ops.list_actions(round_id=args.round, target_id=args.target)
+            if getattr(args, "json", False):
+                print(json.dumps([a.__dict__ for a in actions], default=str, indent=2))
+            else:
+                for a in actions:
+                    print(f"[{a.category.value.upper():<12}]\t{a.target_id or '-'}\t{a.summary}\t({a.status})")
+            return 0
+
+    if args.command == "attack":
+        from .operations import AttackStatus, OperationService
+        from .targets import TargetService
+        ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        ctx = ContextStore(args.state_db).load()
+        cur_rnd = args.round if args.round is not None else (ctx.current_round if ctx else 1)
+        if args.record:
+            if not args.target:
+                raise SystemExit("attack --record requires --target <target_id>")
+            st = AttackStatus(args.status)
+            atk = ops.record_attack(cur_rnd, args.target, args.service, args.method, status=st, notes=args.notes)
+            if getattr(args, "json", False):
+                print(json.dumps(atk.__dict__, default=str, indent=2))
+            else:
+                print(f"Attack [{atk.id[:8]}] recorded against {atk.target_id} ({atk.status.value})")
+            return 0
+        elif args.update_id:
+            st = AttackStatus(args.status)
+            ok = ops.update_attack_status(args.update_id, st, notes=args.notes or None)
+            if getattr(args, "json", False):
+                print(json.dumps({"id": args.update_id, "updated": ok, "status": st.value}))
+            else:
+                print(f"Attack [{args.update_id[:8]}] updated to {st.value}: {ok}")
+            return 0
+        else:
+            attacks = ops.list_attacks(round_id=args.round, target_id=args.target)
+            if getattr(args, "json", False):
+                print(json.dumps([a.__dict__ for a in attacks], default=str, indent=2))
+            else:
+                for a in attacks:
+                    print(f"[{a.id[:8]}]\t{a.target_id}\t{a.service}\t{a.status.value}\t{a.method}")
+            return 0
+
+    if args.command == "defense":
+        from .operations import DefenseStatus, OperationService
+        from .targets import TargetService
+        ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        ctx = ContextStore(args.state_db).load()
+        cur_rnd = args.round if args.round is not None else (ctx.current_round if ctx else 1)
+        if args.record:
+            if not args.target:
+                raise SystemExit("defense --record requires --target <target_id>")
+            st = DefenseStatus(args.status)
+            df = ops.record_defense(cur_rnd, args.target, args.service, args.defense_action, status=st, notes=args.notes)
+            if getattr(args, "json", False):
+                print(json.dumps(df.__dict__, default=str, indent=2))
+            else:
+                print(f"Defense [{df.id[:8]}] recorded for {df.target_id} ({df.status.value})")
+            return 0
+        elif args.update_id:
+            st = DefenseStatus(args.status)
+            ok = ops.update_defense_status(args.update_id, st, notes=args.notes or None)
+            if getattr(args, "json", False):
+                print(json.dumps({"id": args.update_id, "updated": ok, "status": st.value}))
+            else:
+                print(f"Defense [{args.update_id[:8]}] updated to {st.value}: {ok}")
+            return 0
+        else:
+            defenses = ops.list_defenses(round_id=args.round, target_id=args.target)
+            if getattr(args, "json", False):
+                print(json.dumps([d.__dict__ for d in defenses], default=str, indent=2))
+            else:
+                for d in defenses:
+                    print(f"[{d.id[:8]}]\t{d.target_id}\t{d.service}\t{d.status.value}\t{d.action}")
+            return 0
+
+    if args.command == "flag":
+        from .operations import FlagStatus, OperationService
+        from .targets import TargetService
+        ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        ctx = ContextStore(args.state_db).load()
+        cur_rnd = args.round if args.round is not None else (ctx.current_round if ctx else 1)
+        if args.raw_flag:
+            if not args.target:
+                raise SystemExit("flag --record requires --target <target_id>")
+            st = FlagStatus(args.status)
+            fl = ops.record_flag(cur_rnd, args.target, args.source, args.raw_flag, status=st, notes=args.notes)
+            if getattr(args, "json", False):
+                print(json.dumps(fl.__dict__, default=str, indent=2))
+            else:
+                print(f"Flag [{fl.id[:8]}] recorded: {fl.flag_preview} (status: {fl.status.value})")
+            return 0
+        elif args.update_id:
+            st = FlagStatus(args.status)
+            ok = ops.update_flag_status(args.update_id, st, notes=args.notes or None)
+            if getattr(args, "json", False):
+                print(json.dumps({"id": args.update_id, "updated": ok, "status": st.value}))
+            else:
+                print(f"Flag [{args.update_id[:8]}] updated to {st.value}: {ok}")
+            return 0
+        else:
+            flags = ops.list_flags(round_id=args.round, target_id=args.target)
+            if getattr(args, "json", False):
+                print(json.dumps([f.__dict__ for f in flags], default=str, indent=2))
+            else:
+                for f in flags:
+                    print(f"[{f.id[:8]}]\t{f.target_id}\t{f.flag_preview}\t{f.status.value}\t{f.source}")
+            return 0
+
+    if args.command == "sla":
+        from .operations import SlaStatus, OperationService
+        from .targets import TargetService
+        ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        ctx = ContextStore(args.state_db).load()
+        cur_rnd = args.round if args.round is not None else (ctx.current_round if ctx else 1)
+        if args.record:
+            if not args.target:
+                raise SystemExit("sla --record requires --target <target_id>")
+            st = SlaStatus(args.status)
+            sla_rec = ops.record_sla(cur_rnd, args.target, args.service, st, latency_ms=args.latency, source=args.source)
+            if getattr(args, "json", False):
+                print(json.dumps(sla_rec.__dict__, default=str, indent=2))
+            else:
+                lat = f"{sla_rec.latency_ms:.0f}ms" if sla_rec.latency_ms is not None else "n/a"
+                print(f"SLA recorded: {sla_rec.target_id} {sla_rec.service} -> {sla_rec.status.value} ({lat})")
+            return 0
+        else:
+            sla_list = ops.list_sla(round_id=args.round, target_id=args.target)
+            if getattr(args, "json", False):
+                print(json.dumps([s.__dict__ for s in sla_list], default=str, indent=2))
+            else:
+                for s in sla_list:
+                    lat = f"{s.latency_ms:.0f}ms" if s.latency_ms is not None else "n/a"
+                    print(f"{s.target_id}\t{s.service}\t{s.status.value}\t{lat}\t({s.source})")
+            return 0
+
+    if args.command == "timeline":
+        from .operations import OperationService
+        from .targets import TargetService
+        ops = OperationService(args.state_db, target_service=TargetService(args.state_db))
+        entries = ops.get_timeline(round_id=args.round, target_id=args.target, limit=args.limit)
+        if getattr(args, "json", False):
+            print(json.dumps([e.__dict__ for e in entries], default=str, indent=2))
+        else:
+            if not entries:
+                print("(no operational timeline entries found)")
+            else:
+                for e in entries:
+                    t_str = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+                    tgt = f"{e.target_id:<14}" if e.target_id else " " * 14
+                    print(f"{t_str}\t{e.category:<12}\t{tgt}\t{e.title}\t[{e.status}]")
+        return 0
 
     return 1
 
