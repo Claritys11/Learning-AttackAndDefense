@@ -1,3 +1,3 @@
-from .models import Target, Role, Evidence, HealthResult, PatchPlan
+from .models import Evidence, ExploitResult, HealthResult, PatchPlan, Role, Target
 from .registry import TargetRegistry
-__all__ = ["Target", "Role", "Evidence", "HealthResult", "PatchPlan", "TargetRegistry"]
+__all__ = ["Evidence", "ExploitResult", "HealthResult", "PatchPlan", "Role", "Target", "TargetRegistry"]

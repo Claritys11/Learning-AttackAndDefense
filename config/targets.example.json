@@ -1,0 +1,22 @@
+{
+  "targets": [
+    {
+      "id": "svc-own-01",
+      "name": "own-web",
+      "host": "127.0.0.1",
+      "port": 8001,
+      "role": "own",
+      "tags": ["web"],
+      "metadata": { "config_path": "fixtures/own-web/service.ini" }
+    },
+    {
+      "id": "svc-enemy-01",
+      "name": "mock-enemy-web",
+      "host": "127.0.0.1",
+      "port": 8101,
+      "role": "enemy",
+      "tags": ["web"],
+      "metadata": { "config_path": "fixtures/enemy-web/service.ini" }
+    }
+  ]
+}
